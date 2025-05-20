@@ -1,211 +1,232 @@
 import fitz  # PyMuPDF
+import os
 import re
-from collections import Counter
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
-class PDFQueryEngine:
-    def __init__(self, pdf_path):
-        """
-        Initialize the PDF query engine with a PDF file.
+class PDFQuestionAnsweringPipeline:
+    def __init__(self):
+        self.documents = {}
+        self.page_texts = {}
+        self.vectorizer = TfidfVectorizer()
+        self.tfidf_matrix = None
         
-        Args:
-            pdf_path (str): Path to the PDF file
-        """
-        self.pdf_path = pdf_path
-        self.pdf_document = fitz.open(pdf_path)
-        self.full_text = ""
-        self.page_texts = []
-        self._extract_all_text()
-        
-    def _extract_all_text(self):
-        """Extract and store text from all pages of the PDF."""
-        for page_num in range(len(self.pdf_document)):
-            page = self.pdf_document[page_num]
-            page_text = page.get_text()
-            self.page_texts.append(page_text)
-            self.full_text += page_text
-    
-    def find_by_keyword(self, keyword, context_size=100):
-        """
-        Find text snippets containing the given keyword.
-        
-        Args:
-            keyword (str): Keyword to search for
-            context_size (int): Number of characters to include around the keyword
-            
-        Returns:
-            list: List of text snippets containing the keyword with context
-        """
-        results = []
-        keyword_pattern = re.compile(re.escape(keyword), re.IGNORECASE)
-        
-        for page_num, page_text in enumerate(self.page_texts):
-            matches = keyword_pattern.finditer(page_text)
-            for match in matches:
-                start_pos = max(0, match.start() - context_size)
-                end_pos = min(len(page_text), match.end() + context_size)
+    def load_pdfs(self, pdf_dir):
+        """Load multiple PDFs from a directory."""
+        for filename in os.listdir(pdf_dir):
+            if filename.endswith('.pdf'):
+                file_path = os.path.join(pdf_dir, filename)
+                self.load_pdf(file_path)
                 
-                snippet = page_text[start_pos:end_pos]
-                results.append({
-                    "page": page_num + 1,
-                    "snippet": snippet,
-                    "keyword": keyword
-                })
+    def load_pdf(self, pdf_path):
+        """Extract text from a PDF and store it."""
+        doc_name = os.path.basename(pdf_path)
+        doc = fitz.open(pdf_path)
         
-        return results
+        # Extract text from each page
+        all_text = ""
+        page_texts = []
+        
+        for page_num in range(len(doc)):
+            page = doc.load_page(page_num)
+            text = page.get_text()
+            page_texts.append(text)
+            all_text += text + "\n\n"  # Add separation between pages
+            
+        # Store the document text
+        self.documents[doc_name] = all_text
+        self.page_texts[doc_name] = page_texts
+        
+        print(f"Loaded {doc_name} with {len(page_texts)} pages")
+        
+    def preprocess_text(self, text):
+        """Clean and normalize text."""
+        # Convert to lowercase
+        text = text.lower()
+        
+        # Remove extra whitespace
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        return text
+    
+    def build_index(self):
+        """Create TF-IDF vectors for document retrieval."""
+        if not self.documents:
+            print("No documents loaded. Please load PDFs first.")
+            return
+        
+        # Prepare documents for vectorization
+        docs = list(self.documents.values())
+        processed_docs = [self.preprocess_text(doc) for doc in docs]
+        
+        # Create TF-IDF vectors
+        self.tfidf_matrix = self.vectorizer.fit_transform(processed_docs)
+        
+        print(f"Built index with {len(docs)} documents")
+    
+    def find_relevant_document(self, question):
+        """Find the most relevant document for a question."""
+        if self.tfidf_matrix is None:
+            print("Index not built. Please run build_index() first.")
+            return None
+        
+        # Process question
+        processed_question = self.preprocess_text(question)
+        question_vector = self.vectorizer.transform([processed_question])
+        
+        # Calculate similarity with documents
+        similarities = cosine_similarity(question_vector, self.tfidf_matrix)[0]
+        
+        # Get the most similar document
+        most_similar_idx = np.argmax(similarities)
+        doc_name = list(self.documents.keys())[most_similar_idx]
+        
+        return doc_name, similarities[most_similar_idx]
+    
+    def find_relevant_sections(self, question, doc_name, top_n=3):
+        """Find the most relevant page sections for a question."""
+        if doc_name not in self.page_texts:
+            return []
+        
+        # Get page texts for the document
+        pages = self.page_texts[doc_name]
+        
+        # Process pages and question
+        processed_pages = [self.preprocess_text(page) for page in pages]
+        processed_question = self.preprocess_text(question)
+        
+        # Create TF-IDF vectors for pages
+        page_vectorizer = TfidfVectorizer()
+        page_vectors = page_vectorizer.fit_transform(processed_pages)
+        question_vector = page_vectorizer.transform([processed_question])
+        
+        # Calculate similarity with pages
+        similarities = cosine_similarity(question_vector, page_vectors)[0]
+        
+        # Get the top N most similar pages
+        top_indices = similarities.argsort()[-top_n:][::-1]
+        
+        return [(pages[i], similarities[i]) for i in top_indices]
+    
+    def extract_tables(self, pdf_path):
+        """Extract tables from PDF using PyMuPDF."""
+        tables = []
+        doc = fitz.open(pdf_path)
+        
+        for page_num in range(len(doc)):
+            page = doc.load_page(page_num)
+            
+            # Find table-like structures (this is a simplified approach)
+            # For better table extraction, consider using dedicated libraries like tabula-py
+            blocks = page.get_text("blocks")
+            
+            # Simple heuristic: look for blocks with multiple lines and columns
+            for block in blocks:
+                text = block[4]
+                lines = text.split('\n')
+                
+                # Simple check for table-like structure
+                if len(lines) > 3:
+                    # Check if lines have similar structure (e.g., same number of spaces or tabs)
+                    is_table = True
+                    for i in range(1, len(lines)):
+                        if lines[i].count('\t') != lines[0].count('\t'):
+                            is_table = False
+                            break
+                    
+                    if is_table:
+                        tables.append(text)
+        
+        return tables
     
     def answer_question(self, question):
-        """
-        Answer a question based on PDF content using keyword matching.
+        """Answer a question based on loaded PDFs."""
+        if not self.documents:
+            return "No documents loaded. Please load PDFs first."
         
-        Args:
-            question (str): Question to answer
-            
-        Returns:
-            dict: Answer information including relevant snippets
-        """
-        # Extract key terms from the question
-        question_lower = question.lower()
+        # Find relevant document
+        doc_name, doc_similarity = self.find_relevant_document(question)
         
-        # Common words to ignore in keyword extraction
-        stop_words = {"what", "where", "when", "how", "why", "who", "is", "are", "the", "in", "on", "at", "to", "a", "an"}
+        if doc_similarity < 0.1:
+            return "I couldn't find relevant information to answer this question."
         
-        # Extract potential keywords
-        words = re.findall(r'\b\w+\b', question_lower)
-        keywords = [word for word in words if word not in stop_words and len(word) > 3]
+        # Find relevant sections
+        relevant_sections = self.find_relevant_sections(question, doc_name)
         
-        # Find potential KPI indicators
-        kpi_indicators = ["revenue", "profit", "growth", "percentage", "ratio", "sales", 
-                         "cost", "margin", "roi", "return", "investment", "target"]
+        if not relevant_sections:
+            return "I found a potentially relevant document but couldn't locate specific information for your question."
         
-        # Add any KPI indicators found in the question
-        kpi_keywords = [word for word in keywords if word in kpi_indicators]
-        if kpi_keywords:
-            keywords = keywords + kpi_keywords
+        # Compile context
+        context = "\n\n".join([section[0] for section in relevant_sections])
         
-        # If question is about numbers or specific metrics
-        if any(term in question_lower for term in ["how many", "how much", "percentage", "number", "total"]):
-            number_pattern = r'\b\d+(?:\.\d+)?%?\b'
-            # Look for numbers near keywords
-            results = []
-            for keyword in keywords:
-                keyword_results = self.find_by_keyword(keyword)
-                for result in keyword_results:
-                    numbers = re.findall(number_pattern, result["snippet"])
-                    if numbers:
-                        result["numbers"] = numbers
-                        results.append(result)
-            
-            if results:
-                return {
-                    "question": question,
-                    "answer_type": "numerical",
-                    "results": results
-                }
-        
-        # General keyword search
-        all_results = []
-        for keyword in keywords:
-            results = self.find_by_keyword(keyword)
-            all_results.extend(results)
-        
-        # Rank results by relevance (number of keywords found in each snippet)
-        ranked_results = []
-        for result in all_results:
-            score = 0
-            for keyword in keywords:
-                if re.search(re.escape(keyword), result["snippet"], re.IGNORECASE):
-                    score += 1
-            result["relevance_score"] = score
-            ranked_results.append(result)
-        
-        # Sort by relevance score
-        ranked_results.sort(key=lambda x: x["relevance_score"], reverse=True)
-        
-        # Take top 3 most relevant results
-        top_results = ranked_results[:3] if ranked_results else []
+        # Simple answer generation (in production, you might use an LLM API here)
+        answer = self._generate_answer(question, context)
         
         return {
-            "question": question,
-            "answer_type": "descriptive",
-            "results": top_results,
-            "keywords_used": keywords
+            "answer": answer,
+            "source_document": doc_name,
+            "confidence": float(doc_similarity),
+            "relevant_context": context[:500] + "..." if len(context) > 500 else context
         }
     
-    def get_kpi(self, kpi_name):
+    def _generate_answer(self, question, context):
         """
-        Extract KPI values from the PDF.
+        Generate an answer based on context.
         
-        Args:
-            kpi_name (str): Name of the KPI to extract
-            
-        Returns:
-            dict: KPI information
+        For a production system, replace this with a call to an LLM API
+        like OpenAI, Claude, or a local model like LlamaCpp.
         """
-        # Find KPI mentions
-        kpi_results = self.find_by_keyword(kpi_name)
+        # This is a placeholder method
+        # In a real implementation, you would send the question and context to an LLM
         
-        # Look for patterns like "KPI: value" or "KPI is value"
-        kpi_values = []
+        words = question.lower().split()
         
-        for result in kpi_results:
-            snippet = result["snippet"]
-            
-            # Pattern for "KPI: 123" or "KPI: 12.3%" or "KPI is 123"
-            pattern = f"{re.escape(kpi_name)}(?::| is | was | of )? ?(\d+(?:\.\d+)?%?)"
-            matches = re.findall(pattern, snippet, re.IGNORECASE)
-            
-            if matches:
-                for match in matches:
-                    kpi_values.append({
-                        "value": match,
-                        "page": result["page"],
-                        "context": snippet
-                    })
+        # Very simple keyword matching (just for demonstration)
+        for word in words:
+            if word in context.lower():
+                # Find the sentence containing the keyword
+                sentences = re.split(r'(?<=[.!?])\s+', context)
+                for sentence in sentences:
+                    if word in sentence.lower():
+                        return sentence
         
-        return {
-            "kpi": kpi_name,
-            "values": kpi_values
-        }
+        return "Based on the context, I can't generate a specific answer. In a production system, this would use a language model to generate an accurate response."
     
-    def close(self):
-        """Close the PDF document."""
-        self.pdf_document.close()
+    def answer_multiple_questions(self, questions):
+        """Answer a list of questions."""
+        answers = {}
+        for question in questions:
+            answers[question] = self.answer_question(question)
+        return answers
 
 # Example usage
 if __name__ == "__main__":
-    # Replace with your PDF file path
-    pdf_file = "example.pdf"
+    pipeline = PDFQuestionAnsweringPipeline()
     
-    try:
-        # Initialize the query engine
-        query_engine = PDFQueryEngine(pdf_file)
-        
-        # Example: Get a specific KPI
-        revenue_kpi = query_engine.get_kpi("revenue")
-        print("\n=== Revenue KPI ===")
-        if revenue_kpi["values"]:
-            for item in revenue_kpi["values"]:
-                print(f"Value: {item['value']} (Page {item['page']})")
-        else:
-            print("No revenue KPI found")
-        
-        # Example: Answer a question
-        question = "What was the growth percentage in Q2?"
-        answer = query_engine.answer_question(question)
-        
-        print(f"\n=== Question: {question} ===")
-        print(f"Keywords used: {answer['keywords_used']}")
-        
-        if answer["results"]:
-            print("\nRelevant snippets:")
-            for i, result in enumerate(answer["results"]):
-                print(f"\nSnippet {i+1} (Page {result['page']}, Relevance: {result['relevance_score']}):")
-                print(result["snippet"])
-        else:
-            print("No relevant information found")
-        
-        # Close the PDF document
-        query_engine.close()
-        
-    except Exception as e:
-        print(f"An error occurred: {e}")
+    # Load PDFs
+    pipeline.load_pdf("example.pdf")
+    
+    # Build search index
+    pipeline.build_index()
+    
+    # Define questions
+    questions = [
+        "What is the main topic of the document?",
+        "What are the key findings?",
+        "When was the research conducted?",
+        "Who are the authors of the paper?",
+        "What methodology was used?",
+        "What are the limitations mentioned?",
+        "What recommendations are made?",
+        "How does this compare to previous research?"
+    ]
+    
+    # Answer questions
+    results = pipeline.answer_multiple_questions(questions)
+    
+    # Print results
+    for question, result in results.items():
+        print(f"\nQuestion: {question}")
+        print(f"Answer: {result['answer']}")
+        print(f"Source: {result['source_document']} (Confidence: {result['confidence']:.2f})")
