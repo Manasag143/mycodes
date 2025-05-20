@@ -11,6 +11,7 @@ class PDFQuestionAnsweringPipeline:
         self.page_texts = {}
         self.vectorizer = TfidfVectorizer()
         self.tfidf_matrix = None
+        self.doc_names = []  # Store document names in a list to maintain order
         
     def load_pdfs(self, pdf_dir):
         """Load multiple PDFs from a directory."""
@@ -37,6 +38,7 @@ class PDFQuestionAnsweringPipeline:
         # Store the document text
         self.documents[doc_name] = all_text
         self.page_texts[doc_name] = page_texts
+        self.doc_names.append(doc_name)  # Keep track of document order
         
         print(f"Loaded {doc_name} with {len(page_texts)} pages")
         
@@ -69,7 +71,7 @@ class PDFQuestionAnsweringPipeline:
         """Find the most relevant document for a question."""
         if self.tfidf_matrix is None:
             print("Index not built. Please run build_index() first.")
-            return None
+            return None, 0.0
         
         # Process question
         processed_question = self.preprocess_text(question)
@@ -80,7 +82,7 @@ class PDFQuestionAnsweringPipeline:
         
         # Get the most similar document
         most_similar_idx = np.argmax(similarities)
-        doc_name = list(self.documents.keys())[most_similar_idx]
+        doc_name = self.doc_names[most_similar_idx]  # Use the ordered list instead
         
         return doc_name, similarities[most_similar_idx]
     
@@ -118,25 +120,26 @@ class PDFQuestionAnsweringPipeline:
             page = doc.load_page(page_num)
             
             # Find table-like structures (this is a simplified approach)
-            # For better table extraction, consider using dedicated libraries like tabula-py
             blocks = page.get_text("blocks")
             
             # Simple heuristic: look for blocks with multiple lines and columns
             for block in blocks:
-                text = block[4]
-                lines = text.split('\n')
-                
-                # Simple check for table-like structure
-                if len(lines) > 3:
-                    # Check if lines have similar structure (e.g., same number of spaces or tabs)
-                    is_table = True
-                    for i in range(1, len(lines)):
-                        if lines[i].count('\t') != lines[0].count('\t'):
-                            is_table = False
-                            break
+                # blocks are tuples with format (x0, y0, x1, y1, "text", block_no, block_type)
+                if len(block) >= 5:  # Make sure the block has enough elements
+                    text = block[4]
+                    lines = text.split('\n')
                     
-                    if is_table:
-                        tables.append(text)
+                    # Simple check for table-like structure
+                    if len(lines) > 3:
+                        # Check if lines have similar structure (e.g., same number of spaces or tabs)
+                        is_table = True
+                        for i in range(1, len(lines)):
+                            if lines[i].count('\t') != lines[0].count('\t'):
+                                is_table = False
+                                break
+                        
+                        if is_table:
+                            tables.append(text)
         
         return tables
     
