@@ -113,12 +113,42 @@ class PDFExtractor:
             print(f"Error extracting tables from PDF {pdf_path}: {e}")
             return []
             
-    def search_keywords_in_pdf(self, pages: List[Dict[str, Any]], keywords: List[str]) -> Dict[str, List[int]]:
-        """Search for keywords in the extracted PDF text with enhanced pattern matching"""
-        keyword_pages = {}
-        for keyword in keywords:
-            keyword_pages[keyword] = []
+    def search_keywords_in_pdf(self, pages: List[Dict[str, Any]], keywords: List[str], question: str) -> List[int]:
+        """
+        Search for keywords in the extracted PDF text with enhanced pattern matching.
+        Now also uses the complete question as a search pattern.
+        
+        Args:
+            pages: List of dictionaries containing page number and text
+            keywords: List of keywords to search for
+            question: The complete question text
             
+        Returns:
+            List of page numbers where matches were found
+        """
+        relevant_pages = []
+        
+        # First try to find pages with exact question mentions
+        question_keywords = [
+            # The complete question
+            question,
+            # Main subject of the question (remove filler words)
+            re.sub(r'(of company|to which|relates|code|in Rupees)', '', question).strip()
+        ]
+        
+        # Search for the complete question or its main part first
+        for page in pages:
+            for q_keyword in question_keywords:
+                if len(q_keyword) > 10 and q_keyword.lower() in page["text"].lower():
+                    if page["page_num"] not in relevant_pages:
+                        relevant_pages.append(page["page_num"])
+        
+        # If we found pages with the exact question, prioritize those
+        if relevant_pages:
+            return relevant_pages
+        
+        # Otherwise, fall back to the keyword-based search
+        for keyword in keywords:
             # Create variations and patterns for robust matching
             variations = [keyword]
             
@@ -158,10 +188,10 @@ class PDFExtractor:
                             found = True
                             break
                 
-                if found and page["page_num"] not in keyword_pages[keyword]:
-                    keyword_pages[keyword].append(page["page_num"])
+                if found and page["page_num"] not in relevant_pages:
+                    relevant_pages.append(page["page_num"])
                     
-        return keyword_pages
+        return relevant_pages
 
 class QuestionAnswerProcessor:
     """Class for processing PDF content to answer regulatory information questions"""
@@ -183,23 +213,49 @@ class QuestionAnswerProcessor:
         return processed_answer
     
     def _create_qa_prompt(self, question: str, context: str) -> str:
-        """Create a prompt for the Llama model to answer a regulatory question"""
+        """Create a prompt for the Llama model to answer a regulatory question with few-shot examples"""
         # Format the prompt for Llama
         sys_message = "You are an expert in extracting business regulatory information from financial documents with high precision and accuracy."
         
         # Create specific instructions based on question type
         specific_instructions = ""
+        
+        # Few-shot examples based on question type
+        few_shot_examples = ""
+        
         if "CIN" in question or "corporate identity" in question.lower():
             specific_instructions = """
 - For Corporate Identity Number (CIN), look for a code that typically starts with 'L' or 'U' followed by numbers and letters
 - A CIN is a 21-digit alphanumeric code (e.g., L12345MH2010PLC123456)
 - It may appear in the company information section, header, footer, or directors' report
 """
+            few_shot_examples = """
+Example 1:
+Context: "...The Corporate Identity Number (CIN) of the Company is L17110MH1973PLC019786..."
+Question: Corporate identity number (CIN) of company
+Answer: L17110MH1973PLC019786
+
+Example 2:
+Context: "...Corporate Information: CIN - U72200KA2007PTC041760..."
+Question: Corporate identity number (CIN) of company
+Answer: U72200KA2007PTC041760
+"""
         elif "financial year" in question.lower():
             specific_instructions = """
 - Look for phrases like "for the year ended", "financial year", "FY", followed by dates
 - Express the financial year in the format "YYYY-YY" or as stated in the document
 - Check the header of financial statements or the directors' report
+"""
+            few_shot_examples = """
+Example 1:
+Context: "...Annual Report for the Financial Year 2022-23..."
+Question: Financial year to which financial statements relates
+Answer: 2022-23
+
+Example 2:
+Context: "...Statement of Profit and Loss for the year ended March 31, 2023..."
+Question: Financial year to which financial statements relates
+Answer: 2022-23
 """
         elif "4 digit code" in question:
             specific_instructions = """
@@ -208,6 +264,17 @@ class QuestionAnswerProcessor:
 - The code might be labeled as ITC code, NPCS code, HS code, or NIC code
 - Only return the 4-digit code itself, not surrounding text
 """
+            few_shot_examples = """
+Example 1:
+Context: "...The company primarily operates in the business of textile products with ITC code 5205..."
+Question: Product or service category code (ITC/ NPCS 4 digit code)
+Answer: 5205
+
+Example 2:
+Context: "...Main product category as per NIC code 2008: Information Technology services..."
+Question: Product or service category code (ITC/ NPCS 4 digit code)
+Answer: 6201
+"""
         elif "8 digit code" in question:
             specific_instructions = """
 - Look for 8-digit codes associated with specific products or services
@@ -215,21 +282,89 @@ class QuestionAnswerProcessor:
 - The code might be labeled as ITC code, NPCS code, HS code, or product code
 - Only return the 8-digit code itself, not surrounding text
 """
-        elif "turnover" in question.lower():
+            few_shot_examples = """
+Example 1:
+Context: "...Highest revenue generating product: Cotton yarn with ITC code 52051110..."
+Question: Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)
+Answer: 52051110
+
+Example 2:
+Context: "...The specific software product with NPCS code 99831326 contributes the highest revenue..."
+Question: Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)
+Answer: 99831326
+"""
+        elif "turnover" in question.lower() and "category" in question.lower():
             specific_instructions = """
-- Look for financial figures associated with revenue, turnover, or sales
+- Look for financial figures associated with revenue, turnover, or sales of the product/service category
 - Extract the exact amount including the unit (e.g., "Rs. 10,000,000" or "₹ 10 crores")
 - Pay attention to whether amounts are in thousands, lakhs, crores, or millions
 - Check income statement, segment reporting, or directors' report sections
 """
-        elif "description" in question.lower():
+            few_shot_examples = """
+Example 1:
+Context: "...The textile segment generated a total turnover of Rs. 450.75 crores during the year..."
+Question: Turnover of the product or service category (in Rupees)
+Answer: Rs. 450.75 crores
+
+Example 2:
+Context: "...Category revenue: IT services - ₹ 2,356.8 lakhs..."
+Question: Turnover of the product or service category (in Rupees)
+Answer: ₹ 2,356.8 lakhs
+"""
+        elif "turnover" in question.lower() and "highest" in question.lower():
             specific_instructions = """
-- Extract the exact description as stated in the document
+- Look for financial figures associated with the highest revenue, turnover, or sales product/service
+- Extract the exact amount including the unit (e.g., "Rs. 10,000,000" or "₹ 10 crores")
+- Pay attention to whether amounts are in thousands, lakhs, crores, or millions
+- Check product-wise breakdowns in financial statements or reports
+"""
+            few_shot_examples = """
+Example 1:
+Context: "...Cotton yarn (code 52051110) contributed Rs. 275.36 crores, being our top-selling product..."
+Question: Turnover of highest contributing product or service (in Rupees)
+Answer: Rs. 275.36 crores
+
+Example 2:
+Context: "...Revenue distribution by product: Enterprise Software (99831326): ₹ 1,452.6 lakhs (highest), Mobile Apps: ₹ 904.2 lakhs..."
+Question: Turnover of highest contributing product or service (in Rupees)
+Answer: ₹ 1,452.6 lakhs
+"""
+        elif "description" in question.lower() and "category" in question.lower():
+            specific_instructions = """
+- Extract the exact description of the product or service category as stated in the document
 - Look in business segment reporting, notes to accounts, or product sections
-- The description should match the associated code mentioned elsewhere
+- The description should match the associated 4-digit code mentioned elsewhere
+"""
+            few_shot_examples = """
+Example 1:
+Context: "...The company operates in Textile Manufacturing (ITC code 5205) which includes production of cotton and synthetic fabrics..."
+Question: Description of the product or service category
+Answer: Textile Manufacturing
+
+Example 2:
+Context: "...Business segments: Software Development Services (NIC code 6201) - Includes custom application development..."
+Question: Description of the product or service category
+Answer: Software Development Services
+"""
+        elif "description" in question.lower() and "service" in question.lower():
+            specific_instructions = """
+- Extract the exact description of the specific product or service as stated in the document
+- Look for descriptions associated with the highest revenue product or 8-digit code
+- Check product listings, catalog descriptions, or sales breakdowns
+"""
+            few_shot_examples = """
+Example 1:
+Context: "...Our premium combed cotton yarn (code 52051110) remains our flagship product, contributing the highest to our revenue..."
+Question: Description of the product or service
+Answer: Premium combed cotton yarn
+
+Example 2:
+Context: "...Enterprise Resource Planning Software (99831326) continues to be our leading service offering with highest sales..."
+Question: Description of the product or service
+Answer: Enterprise Resource Planning Software
 """
         
-        # Create prompt for Llama with specific format requirements
+        # Create prompt for Llama with specific format requirements and few-shot examples
         prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>{sys_message}
 
 You will be provided with a question and context from a PDF document. Your task is to extract the precise answer to the question from the context.
@@ -241,6 +376,8 @@ Follow these general guidelines:
 - If the answer requires combining information from different parts of the text, do so accurately
 - If the answer is not in the context, respond with "Information not found in the provided context"
 - Do not provide explanations, just the direct answer to the question
+
+{few_shot_examples}
 
 <|eot_id|><|start_header_id|>user<|end_header_id|>
 
@@ -375,18 +512,13 @@ class PDFRegulatoryExtractor:
                 # Get keywords for this question
                 keywords = self.question_keywords.get(question, [])
                 
-                # Search for pages containing these keywords
-                keyword_pages = self.pdf_extractor.search_keywords_in_pdf(pages, keywords)
-                
-                # Combine all page numbers where keywords were found
-                relevant_page_nums = set()
-                for page_nums in keyword_pages.values():
-                    relevant_page_nums.update(page_nums)
+                # Search for pages containing these keywords - now passing the full question
+                relevant_page_nums = self.pdf_extractor.search_keywords_in_pdf(pages, keywords, question)
                 
                 # Always include table content for specific questions
-                if any(term in question.lower() for term in ["code", "turnover", "category", "service", "CIN"]):
+                if len(relevant_page_nums) == 0 and any(term in question.lower() for term in ["code", "turnover", "category", "service", "CIN"]):
                     table_page_nums = [p["page_num"] for p in pages if p["page_num"] >= 1000]
-                    relevant_page_nums.update(table_page_nums)
+                    relevant_page_nums.extend(table_page_nums)
                 
                 # If no relevant pages found, use fallback strategy
                 if not relevant_page_nums:
@@ -394,18 +526,18 @@ class PDFRegulatoryExtractor:
                     
                     # Include first few pages as fallback for CIN and financial year
                     if "CIN" in question or "financial year" in question.lower():
-                        relevant_page_nums = set(range(1, min(10, len(pages) + 1)))
+                        relevant_page_nums = list(range(1, min(10, len(pages) + 1)))
                     else:
                         # For other questions, include all pages with table-like content
                         table_page_nums = [p["page_num"] for p in pages if p["page_num"] >= 1000]
                         if table_page_nums:
-                            relevant_page_nums.update(table_page_nums)
+                            relevant_page_nums.extend(table_page_nums)
                         else:
                             # Last resort: include first few pages
-                            relevant_page_nums = set(range(1, min(5, len(pages) + 1)))
+                            relevant_page_nums = list(range(1, min(5, len(pages) + 1)))
                 
                 # Sort page numbers for readability
-                relevant_page_nums = sorted(list(relevant_page_nums))
+                relevant_page_nums = sorted(list(set(relevant_page_nums)))
                 
                 # Extract text from relevant pages
                 context = ""
