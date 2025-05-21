@@ -1,42 +1,20 @@
-import json
 import os
-import time
-import logging
-import argparse
+import re
 import pandas as pd
 import fitz  # PyMuPDF
-import re
-import warnings
-from typing import Dict, List, Tuple, Optional, Any, Union
 import requests
-from colorama import Fore, Style, init
+import warnings
+from typing import Dict, List, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import ssl
-from urllib3.exceptions import InsecureRequestWarning
 
-# Suppress only the single InsecureRequestWarning
-warnings.simplefilter('ignore', InsecureRequestWarning)
-
-# Initialize colorama for colored terminal output
-init()
+# Suppress SSL warnings
+warnings.filterwarnings('ignore')
 
 # Define the Llama URL
 LLAMA_URL = "https://ue1-llm.crisil.local/llama3_3/70b/llm/"
 
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("pdf_regulatory_extraction.log"),
-        logging.StreamHandler()
-    ]
-)
-
 class LLMGenerator:
-    """
-    Component to generate responses from hosted LLM model using Text Generative Inference.
-    """
+    """Component to generate responses from hosted LLM model"""
     def __init__(self, url: str = LLAMA_URL):
         self.url = url
         self.generation_kwargs = {
@@ -52,107 +30,60 @@ class LLMGenerator:
             "parameters": {**self.generation_kwargs}
         }
         try:
-            # Disable SSL verification warnings
-            requests.packages.urllib3.disable_warnings()
-            
-            # Make the API call
             response = requests.post(self.url, verify=False, json=body)
-            print(f"Request status: {response.status_code}")
             
             if response.status_code != 200:
-                error_msg = f"LLM API error: Status {response.status_code}"
-                logging.error(error_msg)
-                return f"Error: {error_msg}"
+                return f"Error: LLM API error: Status {response.status_code}"
             
             response_json = response.json()
             if isinstance(response_json, list) and len(response_json) > 0:
-                response_text = response_json[0].get('generated_text', '')
-                return response_text
+                return response_json[0].get('generated_text', '')
             else:
-                error_msg = "Unexpected response format from LLM API"
-                logging.error(error_msg)
-                return f"Error: {error_msg}"
+                return "Error: Unexpected response format from LLM API"
                 
         except Exception as e:
-            error_msg = f"Error in LLM call: {e}"
-            logging.error(error_msg)
             return f"Error: {str(e)}"
 
 class PDFExtractor:
-    """Class for extracting text and tables from PDF files using PyMuPDF."""
+    """Class for extracting text and tables from PDF files"""
     
     def extract_text_from_pdf(self, pdf_path: str) -> List[Dict[str, Any]]:
-        """
-        Extract text from each page of a PDF file.
-        
-        Args:
-            pdf_path: Path to the PDF file
-            
-        Returns:
-            List of dictionaries containing page number and text for each page
-        """
+        """Extract text from each page of a PDF file"""
         try:
-            print(Fore.BLUE + f"Extracting text from {pdf_path}")
             doc = fitz.open(pdf_path)
-            
             pages = []
             for page_num, page in enumerate(doc):
                 text = page.get_text()
                 pages.append({
-                    "page_num": page_num + 1,  # 1-indexed page numbers for human readability
+                    "page_num": page_num + 1,
                     "text": text
                 })
-                
-            print(Fore.GREEN + f"Extracted text from {len(pages)} pages")
             return pages
-            
         except Exception as e:
-            logging.error(f"Error extracting text from PDF {pdf_path}: {e}")
+            print(f"Error extracting text from PDF {pdf_path}: {e}")
             raise
     
     def extract_tables_from_pdf(self, pdf_path: str) -> List[Dict[str, Any]]:
-        """
-        Extract potential tables from PDF using heuristics.
-        
-        Args:
-            pdf_path: Path to the PDF file
-            
-        Returns:
-            List of dictionaries containing page number and table text
-        """
+        """Extract potential tables from PDF using heuristics"""
         try:
-            print(Fore.BLUE + f"Scanning for tables in {pdf_path}")
             doc = fitz.open(pdf_path)
-            
             tables = []
+            
             for page_num, page in enumerate(doc):
                 text = page.get_text()
                 
                 # Look for tabular structures
-                # 1. Sections with multiple aligned digits (potential ITC/NPCS codes)
                 digit_patterns = re.findall(r'((?:\d+[\s\t]+){2,}[^\n]+)', text)
-                
-                # 2. Sections with column-like structures
                 column_patterns = re.findall(r'([^\n]+[\s\t]{3,}[^\n]+[\s\t]{3,}[^\n]+)', text)
-                
-                # 3. Look for ITC/NPCS code mentions
                 code_patterns = re.findall(r'([^\n]*(ITC|NPCS|HS|NIC)[\s\t]*(code|Code)[^\n]*(?:\n[^\n]+){0,5})', text)
-                
-                # 4. Look for turnover mentions
                 turnover_patterns = re.findall(
                     r'([^\n]*(turnover|revenue|sales)[\s\t]*(?:of|for)?[\s\t]*(?:product|service)?[^\n]*(?:\n[^\n]+){0,5})', 
-                    text, 
-                    re.IGNORECASE
+                    text, re.IGNORECASE
                 )
-                
-                # 5. Look for CIN pattern
                 cin_patterns = re.findall(r'([^\n]*(CIN|Corporate Identity Number)[^\n]*(?:\n[^\n]+){0,3})', text, re.IGNORECASE)
-                
-                # 6. Look for financial year mentions
                 fy_patterns = re.findall(
                     r'([^\n]*(financial year|FY|F\.Y\.|year ended)[^\n]*(?:\n[^\n]+){0,3})', 
-                    text, 
-                    re.IGNORECASE
+                    text, re.IGNORECASE
                 )
                 
                 # Combine all findings
@@ -161,19 +92,14 @@ class PDFExtractor:
                     
                     if digit_patterns:
                         table_text += "\nPOTENTIAL CODE PATTERNS:\n" + "\n".join(digit_patterns)
-                    
                     if column_patterns:
                         table_text += "\nTABULAR STRUCTURES:\n" + "\n".join(column_patterns)
-                    
                     if code_patterns:
                         table_text += "\nITC/NPCS CODE MENTIONS:\n" + "\n".join([p[0] for p in code_patterns])
-                    
                     if turnover_patterns:
                         table_text += "\nTURNOVER MENTIONS:\n" + "\n".join([p[0] for p in turnover_patterns])
-                    
                     if cin_patterns:
                         table_text += "\nCIN MENTIONS:\n" + "\n".join([p[0] for p in cin_patterns])
-                    
                     if fy_patterns:
                         table_text += "\nFINANCIAL YEAR MENTIONS:\n" + "\n".join([p[0] for p in fy_patterns])
                     
@@ -182,44 +108,30 @@ class PDFExtractor:
                         "table_text": table_text
                     })
             
-            print(Fore.GREEN + f"Found {len(tables)} potential tables/structured content blocks")
             return tables
-            
         except Exception as e:
-            logging.error(f"Error extracting tables from PDF {pdf_path}: {e}")
+            print(f"Error extracting tables from PDF {pdf_path}: {e}")
             return []
             
     def search_keywords_in_pdf(self, pages: List[Dict[str, Any]], keywords: List[str]) -> Dict[str, List[int]]:
-        """
-        Search for keywords in the extracted PDF text with enhanced pattern matching.
-        
-        Args:
-            pages: List of dictionaries containing page number and text
-            keywords: List of keywords to search for
-            
-        Returns:
-            Dictionary mapping keywords to list of page numbers where they appear
-        """
-        print(Fore.BLUE + f"Searching for {len(keywords)} keywords in extracted text")
-        
+        """Search for keywords in the extracted PDF text with enhanced pattern matching"""
         keyword_pages = {}
         for keyword in keywords:
             keyword_pages[keyword] = []
             
-            # Create variations and patterns for more robust matching
+            # Create variations and patterns for robust matching
             variations = [keyword]
             
             # For CIN search, add regex pattern for CIN format
             if keyword.lower() in ["cin", "corporate identity number"]:
-                cin_pattern = r'[LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}'
-                variations.append(cin_pattern)
+                variations.append(r'[LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}')
             
             # For product codes, look for digit patterns
             if "code" in keyword.lower() or "digit" in keyword.lower():
                 if "4 digit" in keyword.lower():
-                    variations.append(r'\b\d{4}\b')  # 4-digit code pattern
+                    variations.append(r'\b\d{4}\b')
                 if "8 digit" in keyword.lower():
-                    variations.append(r'\b\d{8}\b')  # 8-digit code pattern
+                    variations.append(r'\b\d{8}\b')
             
             # For financial years, look for year patterns
             if "financial year" in keyword.lower() or "fy" == keyword.lower():
@@ -249,35 +161,16 @@ class PDFExtractor:
                 if found and page["page_num"] not in keyword_pages[keyword]:
                     keyword_pages[keyword].append(page["page_num"])
                     
-        # Print results
-        for keyword, page_nums in keyword_pages.items():
-            if page_nums:
-                print(Fore.CYAN + f"Keyword '{keyword}' found on pages: {page_nums}")
-            else:
-                print(Fore.YELLOW + f"Keyword '{keyword}' not found in document")
-                
         return keyword_pages
 
 class QuestionAnswerProcessor:
-    """Class for processing PDF content to answer regulatory information questions."""
+    """Class for processing PDF content to answer regulatory information questions"""
     
     def __init__(self, llm_generator: LLMGenerator):
         self.llm_generator = llm_generator
     
     def generate_answer(self, question: str, context: str) -> str:
-        """
-        Generate an answer to a question using the provided context,
-        with post-processing to ensure consistent formatting.
-        
-        Args:
-            question: The question to answer
-            context: The context containing the information needed to answer the question
-            
-        Returns:
-            The generated and post-processed answer
-        """
-        print(Fore.BLUE + f"Generating answer for question: {question}")
-        
+        """Generate an answer to a question using the provided context"""
         # Create a prompt for Llama
         prompt = self._create_qa_prompt(question, context)
         
@@ -287,20 +180,10 @@ class QuestionAnswerProcessor:
         # Post-process the answer for consistent formatting
         processed_answer = self._post_process_answer(question, raw_answer)
         
-        print(Fore.GREEN + f"Generated answer: {processed_answer[:100]}..." if len(processed_answer) > 100 else processed_answer)
         return processed_answer
     
     def _create_qa_prompt(self, question: str, context: str) -> str:
-        """
-        Create a prompt for the Llama model to answer a regulatory question.
-        
-        Args:
-            question: The specific regulatory question to answer
-            context: The context containing the information needed to answer the question
-            
-        Returns:
-            The formatted prompt for the LLM
-        """
+        """Create a prompt for the Llama model to answer a regulatory question"""
         # Format the prompt for Llama
         sys_message = "You are an expert in extracting business regulatory information from financial documents with high precision and accuracy."
         
@@ -372,16 +255,7 @@ Answer the question based only on the information in the context.
         return prompt
     
     def _post_process_answer(self, question: str, answer: str) -> str:
-        """
-        Post-process the answer to format it consistently or extract specific information.
-        
-        Args:
-            question: The original question
-            answer: The raw answer from LLM
-            
-        Returns:
-            Processed answer
-        """
+        """Post-process the answer to format it consistently"""
         # Remove any explanatory text or prefixes
         cleaned = re.sub(r'^(Answer:|The answer is:|Based on the context,)', '', answer).strip()
         
@@ -443,9 +317,7 @@ Answer the question based only on the information in the context.
         return cleaned
 
 class PDFRegulatoryExtractor:
-    """
-    Main class for extracting regulatory information from PDFs and answering specific questions.
-    """
+    """Main class for extracting regulatory information from PDFs"""
     def __init__(self, config_path: str = "config1.json"):
         self.config_path = config_path
         self.llm_generator = LLMGenerator()
@@ -477,18 +349,8 @@ class PDFRegulatoryExtractor:
         }
     
     def process_pdf(self, pdf_path: str) -> Dict[str, str]:
-        """
-        Process a PDF file to extract regulatory information and answer all questions.
-        
-        Args:
-            pdf_path: Path to the PDF file
-            
-        Returns:
-            Dictionary mapping questions to answers
-        """
-        print(Fore.CYAN + "=" * 80)
-        print(Fore.CYAN + f"Processing PDF: {pdf_path}")
-        print(Fore.CYAN + "=" * 80)
+        """Process a PDF file to extract regulatory information and answer all questions"""
+        print(f"Processing PDF: {pdf_path}")
         
         try:
             # Extract regular text from PDF
@@ -528,7 +390,7 @@ class PDFRegulatoryExtractor:
                 
                 # If no relevant pages found, use fallback strategy
                 if not relevant_page_nums:
-                    print(Fore.YELLOW + f"No relevant pages found for question: {question}")
+                    print(f"No relevant pages found for question: {question}")
                     
                     # Include first few pages as fallback for CIN and financial year
                     if "CIN" in question or "financial year" in question.lower():
@@ -561,7 +423,6 @@ class PDFRegulatoryExtractor:
                 # Truncate context if too long (based on Llama's context window)
                 max_context_length = 12000
                 if len(context) > max_context_length:
-                    print(Fore.YELLOW + f"Context too long ({len(context)} chars), truncating...")
                     context = context[:max_context_length]
                 
                 # Generate answer with post-processing for consistent formatting
@@ -570,46 +431,37 @@ class PDFRegulatoryExtractor:
                 # Store answer
                 answers[question] = answer
             
-            print(Fore.GREEN + f"Completed processing of {pdf_path}")
+            print(f"Completed processing of {pdf_path}")
             return answers
             
         except Exception as e:
-            logging.error(f"Error processing PDF {pdf_path}: {e}")
+            print(f"Error processing PDF {pdf_path}: {e}")
             # Return error message for all questions
             return {question: f"Error: {str(e)}" for question in self.questions}
     
     def process_pdfs_batch(self, pdf_dir: str, output_excel: str):
-        """
-        Process multiple PDF files and save results to an Excel file.
-        
-        Args:
-            pdf_dir: Directory containing PDF files
-            output_excel: Path to output Excel file
-        """
-        print(Fore.CYAN + "=" * 80)
-        print(Fore.CYAN + f"Processing all PDFs in directory: {pdf_dir}")
-        print(Fore.CYAN + "=" * 80)
+        """Process multiple PDF files and save results to an Excel file"""
+        print(f"Processing all PDFs in directory: {pdf_dir}")
         
         # Check if directory exists
         if not os.path.isdir(pdf_dir):
-            print(Fore.RED + f"Directory not found: {pdf_dir}")
+            print(f"Directory not found: {pdf_dir}")
             return
         
         # Get all PDF files in the directory
         pdf_files = [f for f in os.listdir(pdf_dir) if f.lower().endswith('.pdf')]
         
         if not pdf_files:
-            print(Fore.RED + f"No PDF files found in {pdf_dir}")
+            print(f"No PDF files found in {pdf_dir}")
             return
         
-        print(Fore.GREEN + f"Found {len(pdf_files)} PDF files")
+        print(f"Found {len(pdf_files)} PDF files")
         
         # Process each PDF and collect results
         results = []
         
-        # Determine number of workers based on system capabilities
+        # Determine number of workers
         num_workers = min(os.cpu_count() or 4, 4)  # Use at most 4 workers
-        print(Fore.BLUE + f"Using {num_workers} parallel workers")
         
         # Use ThreadPoolExecutor for parallel processing
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
@@ -631,10 +483,10 @@ class PDFRegulatoryExtractor:
                     result.update(answers)
                     
                     results.append(result)
-                    print(Fore.GREEN + f"Added results for {pdf_file}")
+                    print(f"Added results for {pdf_file}")
                     
                 except Exception as e:
-                    print(Fore.RED + f"Error processing {pdf_file}: {e}")
+                    print(f"Error processing {pdf_file}: {e}")
                     # Add error entry
                     result = {"PDF Filename": pdf_file}
                     result.update({question: f"Error: {str(e)}" for question in self.questions})
@@ -645,36 +497,36 @@ class PDFRegulatoryExtractor:
             # Create DataFrame
             df = pd.DataFrame(results)
             
-            # Reorder columns to have PDF Filename first, then questions in specified order
+            # Reorder columns to have PDF Filename first, then questions
             columns = ["PDF Filename"] + self.questions
             df = df[columns]
             
             # Save to Excel
             df.to_excel(output_excel, index=False)
-            print(Fore.GREEN + f"Results saved to {output_excel}")
+            print(f"Results saved to {output_excel}")
         else:
-            print(Fore.RED + "No results to save")
+            print("No results to save")
 
 def main():
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description="PDF Regulatory Information Extraction Pipeline")
+    # Simple command line argument handling
+    import argparse
+    parser = argparse.ArgumentParser(description="PDF Regulatory Information Extraction")
     parser.add_argument("--pdf_dir", type=str, default="pdfs", help="Directory containing PDF files")
     parser.add_argument("--output", type=str, default="regulatory_info_results.xlsx", help="Output Excel file")
     parser.add_argument("--config", type=str, default="config1.json", help="Configuration file")
     args = parser.parse_args()
     
     try:
-        # Print startup message
-        print(Fore.CYAN + "=" * 80)
-        print(Fore.CYAN + "PDF REGULATORY INFORMATION EXTRACTION PIPELINE")
-        print(Fore.CYAN + "=" * 80)
+        print("Starting PDF Regulatory Information Extraction")
         
         # Create and run the pipeline
         pipeline = PDFRegulatoryExtractor(config_path=args.config)
         pipeline.process_pdfs_batch(args.pdf_dir, args.output)
         
-        print(Fore.GREEN + "Processing completed successfully!")
+        print("Processing completed successfully!")
         
     except Exception as e:
-        logging.error(f"Pipeline error: {e}", exc_info=True)
-        print(Fore.RED + f"Pipeline error: {e
+        print(f"Pipeline error: {e}")
+
+if __name__ == "__main__":
+    main()
