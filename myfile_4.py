@@ -19,12 +19,13 @@ class LLMGenerator:
     def __init__(self, url: str = LLAMA_URL):
         self.url = url
         self.generation_kwargs = {
-            "max_new_tokens": 1024,  # Reduced since we're sending single page
+            "max_new_tokens": 2048,  # Reduced from 5048
             "return_full_text": False,
             "temperature": 0.1
         }
+        # Use a session for connection pooling
         self.session = requests.Session()
-        self.session.verify = False
+        self.session.verify = False  # Disable SSL verification
 
     def run(self, prompt: str) -> str:
         """Send prompt to LLM and get response with timeout"""
@@ -34,6 +35,7 @@ class LLMGenerator:
             "parameters": {**self.generation_kwargs}
         }
         try:
+            # Add timeout parameter to prevent hanging
             response = self.session.post(self.url, json=body, timeout=30)
             
             if response.status_code != 200:
@@ -72,6 +74,7 @@ class PDFExtractor:
                     "text": text
                 })
                 
+            # Explicitly close the document to free memory
             doc.close()
             print(f"PDF text extraction took {time.time() - start_time:.2f} seconds")
             return pages
@@ -79,60 +82,41 @@ class PDFExtractor:
             print(f"PDF extraction error after {time.time() - start_time:.2f} seconds: {e}")
             raise
     
-    def find_question_page(self, pages: List[Dict[str, Any]], question: str) -> int:
-        """Find the page that contains the exact question"""
+    def search_keywords_in_pdf(self, pages: List[Dict[str, Any]], keywords: List[str], question: str) -> List[int]:
+        """Search for keywords with optimized pattern matching"""
         start_time = time.time()
+        relevant_pages = []
         
-        # Clean the question for better matching
-        question_clean = question.strip()
-        question_lower = question_clean.lower()
+        # First try to find pages with exact question mentions
+        question_keywords = [
+            # The complete question
+            question,
+            # Main subject of the question (remove filler words)
+            re.sub(r'(of company|to which|relates|code|in Rupees)', '', question).strip()
+        ]
         
-        print(f"Searching for question: '{question_clean}'")
-        
-        # First, try to find exact match
+        # Search for the complete question or its main part first
         for page in pages:
-            page_text_lower = page["text"].lower()
-            if question_lower in page_text_lower:
-                print(f"Found exact question match on page {page['page_num']}")
-                print(f"Question search took {time.time() - start_time:.2f} seconds")
-                return page["page_num"]
+            for q_keyword in question_keywords:
+                if len(q_keyword) > 10 and q_keyword.lower() in page["text"].lower():
+                    if page["page_num"] not in relevant_pages:
+                        relevant_pages.append(page["page_num"])
         
-        # If no exact match, try partial matching with key terms
-        key_terms = self._extract_key_terms(question)
-        best_page = None
-        max_matches = 0
+        # If we found pages with the exact question, prioritize those
+        if relevant_pages:
+            print(f"Keyword search took {time.time() - start_time:.2f} seconds (found exact match)")
+            return relevant_pages
         
-        for page in pages:
-            page_text_lower = page["text"].lower()
-            match_count = sum(1 for term in key_terms if term.lower() in page_text_lower)
-            
-            if match_count > max_matches:
-                max_matches = match_count
-                best_page = page["page_num"]
+        # Otherwise, fall back to simplified keyword-based search
+        # Skip complex regex patterns for better performance
+        for keyword in keywords:
+            for page in pages:
+                if keyword.lower() in page["text"].lower():
+                    if page["page_num"] not in relevant_pages:
+                        relevant_pages.append(page["page_num"])
         
-        if best_page:
-            print(f"Found best matching page {best_page} with {max_matches} key term matches")
-        else:
-            print("No matching page found, using page 1 as fallback")
-            best_page = 1
-            
-        print(f"Question search took {time.time() - start_time:.2f} seconds")
-        return best_page
-    
-    def _extract_key_terms(self, question: str) -> List[str]:
-        """Extract key terms from question for partial matching"""
-        # Remove common words and extract meaningful terms
-        common_words = {'of', 'the', 'to', 'which', 'in', 'or', 'and', 'a', 'an', 'is', 'are', 'with'}
-        
-        # Split question into words and filter
-        words = re.findall(r'\b\w+\b', question.lower())
-        key_terms = [word for word in words if word not in common_words and len(word) > 2]
-        
-        # Add the full question as a key term too
-        key_terms.append(question.lower())
-        
-        print(f"Key terms extracted: {key_terms}")
-        return key_terms
+        print(f"Keyword search took {time.time() - start_time:.2f} seconds (found {len(relevant_pages)} pages)")
+        return relevant_pages
 
 class QuestionAnswerProcessor:
     """Class for processing PDF content to answer regulatory information questions"""
@@ -140,97 +124,194 @@ class QuestionAnswerProcessor:
     def __init__(self, llm_generator: LLMGenerator):
         self.llm_generator = llm_generator
     
-    def generate_answer(self, question: str, page_text: str, page_num: int) -> str:
-        """Generate an answer to a question using single page context"""
+    def generate_answer(self, question: str, context: str) -> str:
+        """Generate an answer to a question using the provided context"""
         start_time = time.time()
         
-        # Create a simplified prompt for single page processing
-        prompt = self._create_simple_qa_prompt(question, page_text, page_num)
+        # Create a prompt for Llama
+        prompt = self._create_qa_prompt(question, context)
         
         # Generate the answer
         raw_answer = self.llm_generator.run(prompt)
         
-        # Post-process the answer
+        # Post-process the answer for consistent formatting
         processed_answer = self._post_process_answer(question, raw_answer)
         
-        print(f"Answer generation took {time.time() - start_time:.2f} seconds")
+        print(f"Answer generation for '{question[:30]}...' took {time.time() - start_time:.2f} seconds")
         return processed_answer
     
-    def _create_simple_qa_prompt(self, question: str, page_text: str, page_num: int) -> str:
-        """Create a simple, focused prompt for single page processing"""
+    def _create_qa_prompt(self, question: str, context: str) -> str:
+        """Create a prompt for the Llama model with few-shot examples"""
+        # Format the prompt for Llama
+        sys_message = "You are an expert in extracting business regulatory information from financial documents with high precision and accuracy."
         
-        sys_message = "You are an expert at extracting specific information from financial documents."
+        # Create specific instructions based on question type
+        specific_instructions = ""
+        few_shot_examples = ""
         
-        # Create a focused prompt
+        # Add question-specific instructions and examples
+        if "CIN" in question or "corporate identity" in question.lower():
+            specific_instructions = """
+- For Corporate Identity Number (CIN), look for a code that typically starts with 'L' or 'U' followed by numbers and letters
+- A CIN is a 21-digit alphanumeric code (e.g., L12345MH2010PLC123456)
+"""
+            few_shot_examples = """
+Example:
+Context: "...The Corporate Identity Number (CIN) of the Company is L17110MH1973PLC019786..."
+Question: Corporate identity number (CIN) of company
+Answer: L17110MH1973PLC019786
+"""
+        elif "financial year" in question.lower():
+            specific_instructions = """
+- Look for phrases like "for the year ended", "financial year", "FY", followed by dates
+- Express the financial year in the format "YYYY-YY" or as stated in the document
+"""
+            few_shot_examples = """
+Example:
+Context: "...Annual Report for the Financial Year 2022-23..."
+Question: Financial year to which financial statements relates
+Answer: 2022-23
+"""
+        elif "4 digit code" in question:
+            specific_instructions = """
+- Look for 4-digit codes associated with product or service categories
+- The code might be labeled as ITC code, NPCS code, HS code, or NIC code
+"""
+            few_shot_examples = """
+Example:
+Context: "...The company primarily operates in the business of textile products with ITC code 5205..."
+Question: Product or service category code (ITC/ NPCS 4 digit code)
+Answer: 5205
+"""
+        elif "8 digit code" in question:
+            specific_instructions = """
+- Look for 8-digit codes associated with specific products or services
+- The code might be labeled as ITC code, NPCS code, HS code, or product code
+"""
+        elif "turnover" in question.lower() and "category" in question.lower():
+            specific_instructions = """
+- Look for financial figures associated with revenue, turnover, or sales of the product/service category
+- Extract the exact amount including the unit (e.g., "Rs. 10,000,000" or "₹ 10 crores")
+"""     
+            few_shot_examples = """
+Example:
+Context: "Turnover of highest contributing product or service (in Rupees)"
+Question: Turnover of highest contributing product or service (in Rupees)
+Answer: 309223000
+"""
+        elif "turnover" in question.lower() and "highest" in question.lower():
+            specific_instructions = """
+- Look for financial figures associated with the highest revenue, turnover, or sales product/service
+- Extract the exact numerical amount in Rupees (e.g., "309223000")
+- Look for tables, financial statements, or segment reporting sections
+- The amount may be presented as plain numbers, with commas, or with currency symbols
+"""
+            few_shot_examples = """
+Example:
+Context: "...Turnover of highest contributing product or service: Rs. 30,92,23,000..."
+Question: Turnover of highest contributing product or service (in Rupees)
+Answer: 309223000
+"""
+        elif "description" in question.lower():
+            specific_instructions = """
+- Extract the exact description as stated in the document
+- Look in business segment reporting, notes to accounts, or product sections
+"""
+        
+        # Create simplified prompt for better performance
         prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>{sys_message}
 
-You will find a question and the content from a single page of a PDF document. The question likely appears somewhere in this page content.
+You will be provided with a question and context from a PDF document. Your task is to extract the precise answer to the question from the context.
 
-Your task:
-1. Look for the exact question in the page content
-2. Find the answer that appears near or after the question
-3. Extract ONLY the direct answer value
-4. If you cannot find the question or answer, respond with "Not found"
+{specific_instructions}
+Follow these general guidelines:
+- If the answer is explicitly stated in the text, provide that exact answer
+- If the answer is not in the context, respond with "Information not found in the provided context"
+- Provide only the direct answer without explanations
 
-Important:
-- For numbers, provide only the numeric value (no currency symbols, no units)
-- For codes, provide only the code
-- For descriptions, provide the exact text
-- Do not add explanations or extra text
+{few_shot_examples}
 
 <|eot_id|><|start_header_id|>user<|end_header_id|>
 
 Question: {question}
 
-Page {page_num} Content:
-{page_text}
+Context from PDF:
+{context}
 
-Find the question in the content above and extract the answer that follows it.
+Answer the question based only on the information in the context.
 <|eot_id|><|start_header_id|>assistant<|end_header_id|>"""
         
         return prompt
     
     def _post_process_answer(self, question: str, answer: str) -> str:
-        """Simple post-processing for clean answers"""
-        # Remove common prefixes
-        cleaned = re.sub(r'^(Answer:|The answer is:|Based on|According to)', '', answer, flags=re.IGNORECASE).strip()
+        """Post-process the answer to format it consistently"""
+        # Remove any explanatory text or prefixes
+        cleaned = re.sub(r'^(Answer:|The answer is:|Based on the context,)', '', answer).strip()
         
-        # Handle "not found" responses
-        if re.search(r'(not found|not available|cannot find|could not find)', cleaned, re.IGNORECASE):
+        # Handle "not found" responses consistently
+        if re.search(r'(not found|not provided|not mentioned|couldn\'t find|could not find|no information)', 
+                     cleaned, re.IGNORECASE):
             return "Information not found in the provided context"
         
-        # For turnover questions, extract just the number
-        if "turnover" in question.lower() and "rupees" in question.lower():
-            # Look for numbers (with or without separators)
-            number_match = re.search(r'(\d+(?:,\d+)*(?:\.\d+)?)', cleaned)
-            if number_match:
-                # Remove commas and return clean number
-                return number_match.group(1).replace(',', '')
-        
-        # For CIN, extract the code
-        if "CIN" in question or "corporate identity" in question.lower():
-            cin_match = re.search(r'([LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6})', cleaned)
+        # Format CIN consistently
+        if "CIN" in question or "corporate identity number" in question.lower():
+            # Try to extract CIN format (L12345MH2010PLC123456)
+            cin_match = re.search(r'[LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}', cleaned)
             if cin_match:
-                return cin_match.group(1)
+                return cin_match.group(0)
         
-        # For codes, extract digits
-        if "code" in question.lower():
-            if "4 digit" in question.lower():
-                code_match = re.search(r'(\d{4})', cleaned)
-                if code_match:
-                    return code_match.group(1)
-            elif "8 digit" in question.lower():
-                code_match = re.search(r'(\d{8})', cleaned)
-                if code_match:
-                    return code_match.group(1)
-        
-        # For financial year
+        # Format financial year consistently
         if "financial year" in question.lower():
-            fy_match = re.search(r'(\d{4}[-/]\d{2,4})', cleaned)
+            # Look for common financial year patterns
+            fy_match = re.search(r'(FY|F\.Y\.|Financial Year)[ :]?([0-9]{4}[-/ ][0-9]{2,4})', cleaned, re.IGNORECASE)
             if fy_match:
-                return fy_match.group(1)
+                return fy_match.group(2)
+            
+            # Try another pattern
+            fy_match2 = re.search(r'([0-9]{4}[-/ ][0-9]{2,4})', cleaned)
+            if fy_match2:
+                return fy_match2.group(1)
         
-        return cleaned.strip()
+        # Format product codes consistently
+        if "code" in question.lower():
+            # For 4-digit code
+            if "4 digit" in question.lower():
+                code_match = re.search(r'\b(\d{4})\b', cleaned)
+                if code_match:
+                    return code_match.group(1)
+            
+            # For 8-digit code
+            if "8 digit" in question.lower():
+                code_match = re.search(r'\b(\d{8})\b', cleaned)
+                if code_match:
+                    return code_match.group(1)
+        
+        # Format financial figures consistently - enhanced for highest turnover
+        if "turnover" in question.lower() or "in Rupees" in question:
+            # For the highest turnover question, try to extract just the number
+            if "highest" in question.lower():
+                # Look for pure numbers first (most common format)
+                number_match = re.search(r'\b(\d{1,3}(?:,\d{3})*|\d+)\b', cleaned)
+                if number_match:
+                    # Remove commas and return just the number
+                    return number_match.group(1).replace(',', '')
+            
+            # Try to extract amount with currency and units
+            turnover_match = re.search(r'(Rs\.?|₹|INR)[ ]?([0-9,.]+)[ ]?(lakhs?|crores?|millions?|billions?)?', 
+                                     cleaned, re.IGNORECASE)
+            if turnover_match:
+                currency = turnover_match.group(1) or "Rs."
+                amount = turnover_match.group(2)
+                unit = turnover_match.group(3) or ""
+                return f"{currency} {amount} {unit}".strip()
+            
+            # Try just amount and units
+            amount_match = re.search(r'([0-9,.]+)[ ]?(lakhs?|crores?|millions?|billions?)', cleaned, re.IGNORECASE)
+            if amount_match:
+                return f"Rs. {amount_match.group(1)} {amount_match.group(2)}"
+        
+        # Return the cleaned answer for other questions
+        return cleaned
 
 class PDFRegulatoryExtractor:
     """Main class for extracting regulatory information from PDFs"""
@@ -240,7 +321,7 @@ class PDFRegulatoryExtractor:
         self.pdf_extractor = PDFExtractor()
         self.qa_processor = QuestionAnswerProcessor(self.llm_generator)
         
-        # Exact questions as they appear in PDFs
+        # Define the specific regulatory questions to extract
         self.questions = [
             "Corporate identity number (CIN) of company",
             "Financial year to which financial statements relates",
@@ -251,58 +332,93 @@ class PDFRegulatoryExtractor:
             "Description of the product or service",
             "Turnover of highest contributing product or service (in Rupees)"
         ]
+        
+        # Define keywords for each question - enhanced for the last question
+        self.question_keywords = {
+            "Corporate identity number (CIN) of company": ["CIN", "corporate identity", "L", "U", "registration"],
+            "Financial year to which financial statements relates": ["financial year", "FY", "year ended", "period ended"],
+            "Product or service category code (ITC/ NPCS 4 digit code)": ["ITC", "NPCS", "product code", "4 digit"],
+            "Description of the product or service category": ["product category", "service category", "business segment"],
+            "Turnover of the product or service category (in Rupees)": ["category turnover", "segment turnover", "revenue"],
+            "Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)": ["8 digit", "highest turnover", "main product"],
+            "Description of the product or service": ["product description", "service description", "main offering"],
+            "Turnover of highest contributing product or service (in Rupees)": ["highest turnover", "main product turnover", "primary product revenue", "segment revenue", "business segment", "revenue from operations", "sale of products", "product sales"]
+        }
     
     def process_pdf(self, pdf_path: str) -> Dict[str, str]:
-        """Process a PDF file using single page per question approach"""
+        """Process a PDF file with performance optimization"""
         total_start_time = time.time()
         print(f"Processing PDF: {pdf_path}")
         
         try:
-            # Extract text from PDF
+            # Extract text from PDF - this is where bottlenecks often occur
+            extract_start = time.time()
             pages = self.pdf_extractor.extract_text_from_pdf(pdf_path)
-            print(f"Extracted {len(pages)} pages from PDF")
+            print(f"PDF text extraction completed in {time.time() - extract_start:.2f} seconds")
             
+            # Create a dictionary to store answers
             answers = {}
             
             # Process each question
             for question in self.questions:
                 question_start = time.time()
-                print(f"\nProcessing question: {question}")
+                print(f"Processing question: {question[:30]}...")
                 
-                # Find the page containing this question
-                target_page_num = self.pdf_extractor.find_question_page(pages, question)
+                # Get keywords for this question
+                keywords = self.question_keywords.get(question, [])
                 
-                # Get the page content
-                target_page = None
-                for page in pages:
-                    if page["page_num"] == target_page_num:
-                        target_page = page
-                        break
+                # Search for pages containing these keywords - simplified for performance
+                search_start = time.time()
+                relevant_page_nums = self.pdf_extractor.search_keywords_in_pdf(pages, keywords, question)
+                print(f"  Page search took {time.time() - search_start:.2f} seconds")
                 
-                if target_page:
-                    print(f"Using page {target_page_num} for processing")
-                    print(f"Page content preview: {target_page['text'][:200]}...")
-                    
-                    # Generate answer using single page
-                    answer = self.qa_processor.generate_answer(
-                        question, 
-                        target_page["text"], 
-                        target_page_num
-                    )
-                    
-                    print(f"Generated answer: {answer}")
-                else:
-                    print(f"Could not find page for question")
-                    answer = "Information not found in the provided context"
+                # If no relevant pages found, use fallback strategy - first few pages only
+                if not relevant_page_nums:
+                    print(f"  No relevant pages found, using fallback strategy")
+                    # Just use first few pages as fallback - this is much faster
+                    if "CIN" in question or "financial year" in question.lower():
+                        # First 5 pages for CIN and financial year
+                        relevant_page_nums = list(range(1, min(6, len(pages) + 1)))
+                    else:
+                        # First 3 pages for other questions
+                        relevant_page_nums = list(range(1, min(4, len(pages) + 1)))
                 
+                # Sort page numbers for readability
+                relevant_page_nums = sorted(list(set(relevant_page_nums)))
+                
+                # Extract text from relevant pages
+                context_start = time.time()
+                context = ""
+                for page_num in relevant_page_nums:
+                    # Find the right page
+                    page_indices = [i for i, p in enumerate(pages) if p["page_num"] == page_num]
+                    if page_indices:
+                        context += f"\n--- Page {page_num} ---\n"
+                        context += pages[page_indices[0]]["text"]
+                
+                # Truncate context to reduce LLM processing time
+                max_context_length = 4000  # Drastically reduced from 12000
+                if len(context) > max_context_length:
+                    context = context[:max_context_length]
+                print(f"  Context preparation took {time.time() - context_start:.2f} seconds")
+                
+                # Generate answer - this is where most time is spent
+                llm_start = time.time()
+                answer = self.qa_processor.generate_answer(question, context)
+                print(f"  LLM processing took {time.time() - llm_start:.2f} seconds")
+                
+                # Store answer
                 answers[question] = answer
+                
+                # Log total time for this question
                 print(f"Question processed in {time.time() - question_start:.2f} seconds")
             
-            print(f"\nCompleted processing {pdf_path} in {time.time() - total_start_time:.2f} seconds")
+            print(f"Completed processing {pdf_path} in {time.time() - total_start_time:.2f} seconds")
             return answers
             
         except Exception as e:
             print(f"Error processing PDF {pdf_path}: {e}")
+            # Return error message for all questions
             return {question: f"Error: {str(e)}" for question in self.questions}
     
     def process_pdfs_batch(self, pdf_dir: str, output_excel: str):
@@ -310,10 +426,12 @@ class PDFRegulatoryExtractor:
         batch_start_time = time.time()
         print(f"Processing all PDFs in directory: {pdf_dir}")
         
+        # Check if directory exists
         if not os.path.isdir(pdf_dir):
             print(f"Directory not found: {pdf_dir}")
             return
         
+        # Get all PDF files in the directory
         pdf_files = [f for f in os.listdir(pdf_dir) if f.lower().endswith('.pdf')]
         
         if not pdf_files:
@@ -322,51 +440,53 @@ class PDFRegulatoryExtractor:
         
         print(f"Found {len(pdf_files)} PDF files")
         
+        # Process each PDF and collect results
         results = []
         
+        # Use serial processing for better bottleneck identification
+        # For production, you can re-enable parallel processing if needed
         for pdf_file in pdf_files:
             pdf_path = os.path.join(pdf_dir, pdf_file)
             try:
+                # Get answers for this PDF
                 pdf_start_time = time.time()
-                print(f"\n{'='*50}")
-                print(f"Processing: {pdf_file}")
-                print(f"{'='*50}")
-                
                 answers = self.process_pdf(pdf_path)
                 
+                # Add filename to results
                 result = {"PDF Filename": pdf_file}
                 result.update(answers)
                 
                 results.append(result)
-                print(f"\nCompleted {pdf_file} in {time.time() - pdf_start_time:.2f} seconds")
+                print(f"Processed {pdf_file} in {time.time() - pdf_start_time:.2f} seconds")
                 
             except Exception as e:
                 print(f"Error processing {pdf_file}: {e}")
+                # Add error entry
                 result = {"PDF Filename": pdf_file}
                 result.update({question: f"Error: {str(e)}" for question in self.questions})
                 results.append(result)
         
+        # Create a DataFrame and save to Excel
         if results:
+            # Create DataFrame
             df = pd.DataFrame(results)
+            
+            # Reorder columns to have PDF Filename first, then questions
             columns = ["PDF Filename"] + self.questions
             df = df[columns]
-            df.to_excel(output_excel, index=False)
-            print(f"\nResults saved to {output_excel}")
             
-            # Print summary
-            print(f"\nSUMMARY:")
-            print(f"Total PDFs processed: {len(results)}")
-            for question in self.questions:
-                found_count = sum(1 for result in results if result[question] != "Information not found in the provided context" and not result[question].startswith("Error:"))
-                print(f"'{question[:50]}...': {found_count}/{len(results)} found")
+            # Save to Excel
+            df.to_excel(output_excel, index=False)
+            print(f"Results saved to {output_excel}")
         else:
             print("No results to save")
         
-        print(f"\nTotal batch processing completed in {time.time() - batch_start_time:.2f} seconds")
+        print(f"Total batch processing completed in {time.time() - batch_start_time:.2f} seconds")
 
 def main():
+    # Simple command line argument handling
     import argparse
-    parser = argparse.ArgumentParser(description="Simplified PDF Regulatory Information Extraction")
+    parser = argparse.ArgumentParser(description="Optimized PDF Regulatory Information Extraction")
     parser.add_argument("--pdf_dir", type=str, default="C:\\Users\\c-ManasA\\OneDrive - crisil.com\\Desktop\\New folder\\pdf's", help="Directory containing PDF files")
     parser.add_argument("--output", type=str, default="regulatory_info_results.xlsx", help="Output Excel file")
     parser.add_argument("--config", type=str, default="config1.json", help="Configuration file")
@@ -374,27 +494,32 @@ def main():
     args = parser.parse_args()
     
     try:
-        print("Starting Simplified PDF Regulatory Information Extraction")
-        print("Strategy: Use complete question as keyword, process single page per question")
+        print("Starting PDF Regulatory Information Extraction")
         start_time = time.time()
         
+        # Create pipeline
         pipeline = PDFRegulatoryExtractor(config_path=args.config)
         
+        # Process single PDF or directory
         if args.single_pdf:
             if not os.path.isfile(args.single_pdf):
                 print(f"PDF file not found: {args.single_pdf}")
                 return
                 
+            # Process single PDF
             results = []
             pdf_file = os.path.basename(args.single_pdf)
             
             try:
+                # Process the PDF
                 answers = pipeline.process_pdf(args.single_pdf)
                 
+                # Add to results
                 result = {"PDF Filename": pdf_file}
                 result.update(answers)
                 results.append(result)
                 
+                # Create a DataFrame and save to Excel
                 df = pd.DataFrame(results)
                 columns = ["PDF Filename"] + pipeline.questions
                 df = df[columns]
@@ -404,9 +529,10 @@ def main():
             except Exception as e:
                 print(f"Error processing {args.single_pdf}: {e}")
         else:
+            # Process all PDFs in directory
             pipeline.process_pdfs_batch(args.pdf_dir, args.output)
         
-        print(f"\nProcessing completed successfully in {time.time() - start_time:.2f} seconds!")
+        print(f"Processing completed successfully in {time.time() - start_time:.2f} seconds!")
         
     except Exception as e:
         print(f"Pipeline error: {e}")
