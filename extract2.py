@@ -3,223 +3,156 @@ import re
 import time
 import pandas as pd
 import fitz  # PyMuPDF
-import warnings
 from typing import Dict, List, Any, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Suppress warnings
-warnings.filterwarnings('ignore')
-
-class PDFExtractor:
-    """Class for extracting text from PDF files"""
-    
-    def extract_text_from_pdf(self, pdf_path: str) -> List[Dict[str, Any]]:
-        """Extract text from each page of a PDF file"""
-        start_time = time.time()
-        try:
-            doc = fitz.open(pdf_path)
-            pages = []
-            for page_num, page in enumerate(doc):
-                text = page.get_text()
-                pages.append({
-                    "page_num": page_num + 1,
-                    "text": text
-                })
-                
-            # Explicitly close the document to free memory
-            doc.close()
-            print(f"PDF text extraction took {time.time() - start_time:.2f} seconds")
-            return pages
-        except Exception as e:
-            print(f"PDF extraction error after {time.time() - start_time:.2f} seconds: {e}")
-            raise
-
-class PatternBasedExtractor:
-    """Class for extracting regulatory information using pattern matching"""
+class RuleBasedExtractor:
+    """Rule-based extractor for consistent PDF forms"""
     
     def __init__(self):
         # Define extraction patterns for each question
         self.patterns = {
             "Corporate identity number (CIN) of company": [
-                r'CIN[:\s]*([LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6})',
-                r'Corporate Identity Number[:\s]*([LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6})',
+                r'(?:CIN|Corporate Identity Number)[:\s]*([LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6})',
                 r'([LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6})',
+                r'(?:Registration No|Reg\. No)[:\s]*([LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6})'
             ],
             "Financial year to which financial statements relates": [
-                r'Financial Year[:\s]*([0-9]{4}[-/][0-9]{2,4})',
-                r'FY[:\s]*([0-9]{4}[-/][0-9]{2,4})',
-                r'for the year ended[:\s]*([0-9]{4}[-/][0-9]{2,4})',
+                r'(?:Financial Year|FY|Year ended|Period ended)[:\s]*([0-9]{4}[-/][0-9]{2,4})',
+                r'(?:for the year ended|year ending)[:\s]*([0-9]{4}[-/][0-9]{2,4})',
                 r'([0-9]{4}[-/][0-9]{2,4})',
+                r'(?:FY|F\.Y\.)[:\s]*([0-9]{4}[-/][0-9]{2,4})'
             ],
             "Product or service category code (ITC/ NPCS 4 digit code)": [
-                r'ITC[:\s]*(\d{4})',
-                r'NPCS[:\s]*(\d{4})',
-                r'Product.*code[:\s]*(\d{4})',
-                r'Service.*code[:\s]*(\d{4})',
-                r'Category.*code[:\s]*(\d{4})',
+                r'(?:ITC|NPCS)[:\s]*([0-9]{4})',
+                r'(?:Product Code|Service Code)[:\s]*([0-9]{4})',
+                r'(?:Category Code)[:\s]*([0-9]{4})',
+                r'([0-9]{4})'  # Fallback for any 4-digit number
             ],
             "Description of the product or service category": [
-                r'Product category[:\s]*([^\n\r]{10,100})',
-                r'Service category[:\s]*([^\n\r]{10,100})',
-                r'Business segment[:\s]*([^\n\r]{10,100})',
-                r'Main business[:\s]*([^\n\r]{10,100})',
+                r'(?:Product Category|Service Category|Description)[:\s]*([A-Za-z\s,&-]+)',
+                r'(?:Business Segment|Primary Business)[:\s]*([A-Za-z\s,&-]+)',
+                r'(?:Nature of Business)[:\s]*([A-Za-z\s,&-]+)'
             ],
             "Turnover of the product or service category (in Rupees)": [
-                r'Category turnover[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
-                r'Segment turnover[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
-                r'Product category.*turnover[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
-                r'Service category.*turnover[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
+                r'(?:Category Turnover|Segment Turnover)[:\s]*(?:Rs\.?|₹|INR)?\s*([0-9,]+\.?[0-9]*)',
+                r'(?:Revenue)[:\s]*(?:Rs\.?|₹|INR)?\s*([0-9,]+\.?[0-9]*)',
+                r'(?:Turnover)[:\s]*(?:Rs\.?|₹|INR)?\s*([0-9,]+\.?[0-9]*)'
             ],
             "Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)": [
-                r'Highest.*code[:\s]*(\d{8})',
-                r'Main product.*code[:\s]*(\d{8})',
-                r'Primary.*code[:\s]*(\d{8})',
-                r'8 digit.*code[:\s]*(\d{8})',
+                r'(?:Highest.*?ITC|Main.*?ITC|Primary.*?ITC)[:\s]*([0-9]{8})',
+                r'(?:ITC|NPCS)[:\s]*([0-9]{8})',
+                r'(?:Product Code|Service Code)[:\s]*([0-9]{8})',
+                r'([0-9]{8})'  # Fallback for any 8-digit number
             ],
             "Description of the product or service": [
-                r'Product description[:\s]*([^\n\r]{10,150})',
-                r'Service description[:\s]*([^\n\r]{10,150})',
-                r'Main product[:\s]*([^\n\r]{10,150})',
-                r'Primary service[:\s]*([^\n\r]{10,150})',
+                r'(?:Product Description|Service Description|Main Product)[:\s]*([A-Za-z\s,&.-]+)',
+                r'(?:Primary Product|Main Service)[:\s]*([A-Za-z\s,&.-]+)',
+                r'(?:Description)[:\s]*([A-Za-z\s,&.-]+)'
             ],
             "Turnover of highest contributing product or service (in Rupees)": [
-                r'Highest.*turnover[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
-                r'Main product.*turnover[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
-                r'Primary.*revenue[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
-                r'Highest contributing.*[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
-                r'Product sales[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
+                r'(?:Highest.*?Turnover|Main.*?Turnover|Primary.*?Turnover)[:\s]*(?:Rs\.?|₹|INR)?\s*([0-9,]+\.?[0-9]*)',
+                r'(?:Revenue from operations|Sale of products)[:\s]*(?:Rs\.?|₹|INR)?\s*([0-9,]+\.?[0-9]*)',
+                r'(?:Product sales|Primary revenue)[:\s]*(?:Rs\.?|₹|INR)?\s*([0-9,]+\.?[0-9]*)',
+                # Look for tables with revenue/turnover data
+                r'([0-9,]+\.?[0-9]*)',  # Generic number pattern as fallback
             ]
         }
         
         # Define which pages to search for each question
-        self.page_preferences = {
-            "Corporate identity number (CIN) of company": [1, 2, 3],  # Usually on first few pages
-            "Financial year to which financial statements relates": [1, 2, 3],  # Usually on first few pages
-            "Product or service category code (ITC/ NPCS 4 digit code)": [10, 11, 12, 9, 8],  # Around page 10
-            "Description of the product or service category": [10, 11, 12, 9, 8],
-            "Turnover of the product or service category (in Rupees)": [10, 11, 12, 9, 8],
-            "Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)": [10, 11, 12, 9, 8],
-            "Description of the product or service": [10, 11, 12, 9, 8],
-            "Turnover of highest contributing product or service (in Rupees)": [10, 11, 12, 9, 8]
+        self.page_mapping = {
+            "Corporate identity number (CIN) of company": [1],
+            "Financial year to which financial statements relates": [1],
+            "Product or service category code (ITC/ NPCS 4 digit code)": [10, 9, 11, 8, 12],
+            "Description of the product or service category": [10, 9, 11, 8, 12],
+            "Turnover of the product or service category (in Rupees)": [10, 9, 11, 8, 12],
+            "Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)": [10, 9, 11, 8, 12],
+            "Description of the product or service": [10, 9, 11, 8, 12],
+            "Turnover of highest contributing product or service (in Rupees)": [10, 9, 11, 8, 12]
         }
     
-    def extract_with_patterns(self, question: str, pages: List[Dict[str, Any]]) -> str:
-        """Extract answer using pattern matching"""
-        start_time = time.time()
+    def extract_with_patterns(self, text: str, patterns: List[str], question: str) -> Optional[str]:
+        """Extract information using regex patterns"""
+        for pattern in patterns:
+            try:
+                matches = re.findall(pattern, text, re.IGNORECASE | re.MULTILINE)
+                if matches:
+                    # Return the first match, cleaned up
+                    result = matches[0].strip()
+                    
+                    # Post-process based on question type
+                    if "CIN" in question:
+                        # Validate CIN format
+                        if re.match(r'^[LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$', result):
+                            return result
+                    
+                    elif "financial year" in question.lower():
+                        # Clean up financial year format
+                        result = re.sub(r'[^\d\-/]', '', result)
+                        if len(result) >= 7:  # At least YYYY-YY
+                            return result
+                    
+                    elif "4 digit code" in question.lower():
+                        # Ensure it's exactly 4 digits
+                        if re.match(r'^\d{4}$', result):
+                            return result
+                    
+                    elif "8 digit code" in question.lower():
+                        # Ensure it's exactly 8 digits
+                        if re.match(r'^\d{8}$', result):
+                            return result
+                    
+                    elif "turnover" in question.lower() and "Rupees" in question:
+                        # Clean up numeric values
+                        clean_number = re.sub(r'[^\d.,]', '', result)
+                        clean_number = clean_number.replace(',', '')
+                        if clean_number and clean_number.replace('.', '').isdigit():
+                            return clean_number
+                    
+                    elif "description" in question.lower():
+                        # Clean up description text
+                        result = re.sub(r'[^\w\s,&.-]', '', result)
+                        if len(result.strip()) > 3:  # Ensure meaningful description
+                            return result.strip()
+                    
+                    else:
+                        return result
+                        
+            except Exception as e:
+                continue
         
-        # Get patterns for this question
-        question_patterns = self.patterns.get(question, [])
-        if not question_patterns:
-            return "No patterns defined for this question"
-        
-        # Get preferred pages for this question
-        preferred_pages = self.page_preferences.get(question, [1, 2, 3])
-        
-        # Search in preferred pages first
-        for page_num in preferred_pages:
-            if page_num <= len(pages):
-                page_text = pages[page_num - 1]["text"]
-                
-                # Try each pattern
-                for pattern in question_patterns:
-                    matches = re.finditer(pattern, page_text, re.IGNORECASE | re.MULTILINE)
-                    for match in matches:
-                        result = match.group(1).strip()
-                        if result and len(result) > 0:
-                            # Clean up the result
-                            cleaned_result = self._clean_extracted_text(question, result)
-                            if self._validate_result(question, cleaned_result):
-                                print(f"Pattern extraction for '{question[:30]}...' took {time.time() - start_time:.2f} seconds")
-                                return cleaned_result
-        
-        # If not found in preferred pages, search all pages
-        for page in pages:
-            page_text = page["text"]
+        return None
+    
+    def extract_from_table(self, text: str, question: str) -> Optional[str]:
+        """Extract information from table structures"""
+        if "turnover" in question.lower() and "highest" in question.lower():
+            # Look for table patterns with revenue/turnover data
+            lines = text.split('\n')
             
-            # Try each pattern
-            for pattern in question_patterns:
-                matches = re.finditer(pattern, page_text, re.IGNORECASE | re.MULTILINE)
-                for match in matches:
-                    result = match.group(1).strip()
-                    if result and len(result) > 0:
-                        # Clean up the result
-                        cleaned_result = self._clean_extracted_text(question, result)
-                        if self._validate_result(question, cleaned_result):
-                            print(f"Pattern extraction for '{question[:30]}...' took {time.time() - start_time:.2f} seconds")
-                            return cleaned_result
+            # Look for lines that might contain revenue data
+            for i, line in enumerate(lines):
+                if re.search(r'(?:revenue|turnover|sales)', line, re.IGNORECASE):
+                    # Check surrounding lines for numbers
+                    for j in range(max(0, i-2), min(len(lines), i+3)):
+                        numbers = re.findall(r'\b(\d{6,})\b', lines[j])
+                        if numbers:
+                            return numbers[0]  # Return the largest looking number
+            
+            # Fallback: look for any large numbers that might be revenue
+            all_numbers = re.findall(r'\b(\d{6,})\b', text)
+            if all_numbers:
+                # Return the largest number found (likely to be revenue)
+                return max(all_numbers, key=lambda x: int(x))
         
-        print(f"Pattern extraction failed for '{question[:30]}...' after {time.time() - start_time:.2f} seconds")
-        return "Information not found in the provided context"
-    
-    def _clean_extracted_text(self, question: str, text: str) -> str:
-        """Clean extracted text based on question type"""
-        # Remove extra whitespace
-        text = re.sub(r'\s+', ' ', text.strip())
-        
-        # Question-specific cleaning
-        if "CIN" in question:
-            # CIN should be alphanumeric only
-            text = re.sub(r'[^A-Z0-9]', '', text.upper())
-        
-        elif "financial year" in question.lower():
-            # Clean financial year format
-            text = re.sub(r'[^\d\-/]', '', text)
-        
-        elif "code" in question.lower():
-            # Codes should be numeric only
-            text = re.sub(r'[^\d]', '', text)
-        
-        elif "turnover" in question.lower() or "in Rupees" in question:
-            # Remove currency symbols and clean numbers
-            text = re.sub(r'[^\d,]', '', text)
-            text = text.replace(',', '')  # Remove commas for consistency
-        
-        elif "description" in question.lower():
-            # Clean descriptions - remove excessive punctuation
-            text = re.sub(r'[^\w\s\-.,]', '', text)
-            text = text[:100]  # Limit length
-        
-        return text.strip()
-    
-    def _validate_result(self, question: str, result: str) -> bool:
-        """Validate extracted result based on question type"""
-        if not result or len(result.strip()) == 0:
-            return False
-        
-        # Question-specific validation
-        if "CIN" in question:
-            # CIN should be exactly 21 characters, starting with L or U
-            return len(result) == 21 and result[0] in ['L', 'U']
-        
-        elif "financial year" in question.lower():
-            # Should contain year pattern
-            return bool(re.search(r'\d{4}', result))
-        
-        elif "4 digit code" in question:
-            # Should be exactly 4 digits
-            return len(result) == 4 and result.isdigit()
-        
-        elif "8 digit code" in question:
-            # Should be exactly 8 digits
-            return len(result) == 8 and result.isdigit()
-        
-        elif "turnover" in question.lower():
-            # Should be numeric
-            return result.isdigit() and len(result) > 0
-        
-        elif "description" in question.lower():
-            # Should have reasonable length
-            return 5 <= len(result) <= 150
-        
-        return True
+        return None
 
-class FastPDFRegulatoryExtractor:
-    """Fast pattern-based extractor for standardized forms"""
+class PDFRegulatoryExtractorFast:
+    """Fast rule-based PDF extractor for consistent forms"""
     
     def __init__(self):
-        self.pdf_extractor = PDFExtractor()
-        self.pattern_extractor = PatternBasedExtractor()
+        self.extractor = RuleBasedExtractor()
         
-        # Define the specific regulatory questions to extract
+        # Define the questions
         self.questions = [
             "Corporate identity number (CIN) of company",
             "Financial year to which financial statements relates",
@@ -231,41 +164,68 @@ class FastPDFRegulatoryExtractor:
             "Turnover of highest contributing product or service (in Rupees)"
         ]
     
+    def extract_text_from_specific_pages(self, pdf_path: str, page_numbers: List[int]) -> str:
+        """Extract text from specific pages only"""
+        try:
+            doc = fitz.open(pdf_path)
+            text = ""
+            
+            for page_num in page_numbers:
+                if page_num <= len(doc):
+                    page = doc[page_num - 1]  # fitz uses 0-based indexing
+                    page_text = page.get_text()
+                    text += f"\n--- Page {page_num} ---\n" + page_text
+            
+            doc.close()
+            return text
+            
+        except Exception as e:
+            print(f"Error extracting text from {pdf_path}: {e}")
+            return ""
+    
     def process_pdf(self, pdf_path: str) -> Dict[str, str]:
-        """Process a PDF file using pattern matching"""
-        total_start_time = time.time()
-        print(f"Processing PDF: {pdf_path}")
+        """Process a single PDF file"""
+        start_time = time.time()
+        print(f"Processing PDF: {os.path.basename(pdf_path)}")
+        
+        results = {}
         
         try:
-            # Extract text from PDF
-            extract_start = time.time()
-            pages = self.pdf_extractor.extract_text_from_pdf(pdf_path)
-            print(f"PDF text extraction completed in {time.time() - extract_start:.2f} seconds")
-            
-            # Create a dictionary to store answers
-            answers = {}
-            
-            # Process each question using pattern matching
+            # Process each question
             for question in self.questions:
-                question_start = time.time()
-                print(f"Processing question: {question[:50]}...")
+                # Get the pages to search for this question
+                pages_to_search = self.extractor.page_mapping.get(question, [1])
                 
-                # Extract using patterns
-                answer = self.pattern_extractor.extract_with_patterns(question, pages)
-                answers[question] = answer
+                # Extract text from relevant pages only
+                text = self.extract_text_from_specific_pages(pdf_path, pages_to_search)
                 
-                print(f"Question processed in {time.time() - question_start:.2f} seconds")
+                if not text:
+                    results[question] = "Error: Could not extract text from PDF"
+                    continue
+                
+                # Try to extract using patterns
+                patterns = self.extractor.patterns.get(question, [])
+                extracted_value = self.extractor.extract_with_patterns(text, patterns, question)
+                
+                # If pattern matching failed, try table extraction for turnover questions
+                if not extracted_value and "turnover" in question.lower():
+                    extracted_value = self.extractor.extract_from_table(text, question)
+                
+                # Store result
+                if extracted_value:
+                    results[question] = extracted_value
+                else:
+                    results[question] = "Information not found"
             
-            print(f"Completed processing {pdf_path} in {time.time() - total_start_time:.2f} seconds")
-            return answers
+            print(f"Processed {os.path.basename(pdf_path)} in {time.time() - start_time:.2f} seconds")
+            return results
             
         except Exception as e:
             print(f"Error processing PDF {pdf_path}: {e}")
-            # Return error message for all questions
             return {question: f"Error: {str(e)}" for question in self.questions}
     
-    def process_pdfs_batch(self, pdf_dir: str, output_excel: str):
-        """Process multiple PDF files and save results to an Excel file"""
+    def process_pdfs_batch_parallel(self, pdf_dir: str, output_excel: str, max_workers: int = 4):
+        """Process multiple PDFs in parallel"""
         batch_start_time = time.time()
         print(f"Processing all PDFs in directory: {pdf_dir}")
         
@@ -274,7 +234,85 @@ class FastPDFRegulatoryExtractor:
             print(f"Directory not found: {pdf_dir}")
             return
         
-        # Get all PDF files in the directory
+        # Get all PDF files
+        pdf_files = [f for f in os.listdir(pdf_dir) if f.lower().endswith('.pdf')]
+        
+        if not pdf_files:
+            print(f"No PDF files found in {pdf_dir}")
+            return
+        
+        print(f"Found {len(pdf_files)} PDF files")
+        print(f"Using {max_workers} parallel workers")
+        
+        results = []
+        
+        # Process PDFs in parallel
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all PDF processing tasks
+            future_to_pdf = {
+                executor.submit(self.process_pdf, os.path.join(pdf_dir, pdf_file)): pdf_file 
+                for pdf_file in pdf_files
+            }
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_pdf):
+                pdf_file = future_to_pdf[future]
+                try:
+                    pdf_results = future.result()
+                    
+                    # Add filename to results
+                    result = {"PDF Filename": pdf_file}
+                    result.update(pdf_results)
+                    results.append(result)
+                    
+                    print(f"Completed: {pdf_file}")
+                    
+                except Exception as e:
+                    print(f"Error processing {pdf_file}: {e}")
+                    # Add error entry
+                    result = {"PDF Filename": pdf_file}
+                    result.update({question: f"Error: {str(e)}" for question in self.questions})
+                    results.append(result)
+        
+        # Save results to Excel
+        if results:
+            # Create DataFrame
+            df = pd.DataFrame(results)
+            
+            # Reorder columns
+            columns = ["PDF Filename"] + self.questions
+            df = df[columns]
+            
+            # Save to Excel
+            df.to_excel(output_excel, index=False)
+            print(f"Results saved to {output_excel}")
+            
+            # Print summary statistics
+            print(f"\nSummary:")
+            print(f"Total PDFs processed: {len(results)}")
+            
+            for question in self.questions:
+                found_count = sum(1 for r in results if r[question] not in ["Information not found", "Error: Could not extract text from PDF"])
+                print(f"{question[:50]}...: {found_count}/{len(results)} found")
+        
+        else:
+            print("No results to save")
+        
+        total_time = time.time() - batch_start_time
+        print(f"\nTotal processing completed in {total_time:.2f} seconds")
+        print(f"Average time per PDF: {total_time/len(pdf_files):.2f} seconds")
+    
+    def process_pdfs_batch_serial(self, pdf_dir: str, output_excel: str):
+        """Process PDFs one by one (for debugging)"""
+        batch_start_time = time.time()
+        print(f"Processing all PDFs in directory: {pdf_dir}")
+        
+        # Check if directory exists
+        if not os.path.isdir(pdf_dir):
+            print(f"Directory not found: {pdf_dir}")
+            return
+        
+        # Get all PDF files
         pdf_files = [f for f in os.listdir(pdf_dir) if f.lower().endswith('.pdf')]
         
         if not pdf_files:
@@ -283,22 +321,20 @@ class FastPDFRegulatoryExtractor:
         
         print(f"Found {len(pdf_files)} PDF files")
         
-        # Process each PDF and collect results
         results = []
         
-        for i, pdf_file in enumerate(pdf_files):
+        # Process each PDF
+        for i, pdf_file in enumerate(pdf_files, 1):
             pdf_path = os.path.join(pdf_dir, pdf_file)
+            print(f"\nProcessing {i}/{len(pdf_files)}: {pdf_file}")
+            
             try:
-                # Get answers for this PDF
-                pdf_start_time = time.time()
-                answers = self.process_pdf(pdf_path)
+                pdf_results = self.process_pdf(pdf_path)
                 
                 # Add filename to results
                 result = {"PDF Filename": pdf_file}
-                result.update(answers)
-                
+                result.update(pdf_results)
                 results.append(result)
-                print(f"Processed {pdf_file} ({i+1}/{len(pdf_files)}) in {time.time() - pdf_start_time:.2f} seconds")
                 
             except Exception as e:
                 print(f"Error processing {pdf_file}: {e}")
@@ -307,73 +343,90 @@ class FastPDFRegulatoryExtractor:
                 result.update({question: f"Error: {str(e)}" for question in self.questions})
                 results.append(result)
         
-        # Create a DataFrame and save to Excel
+        # Save results to Excel
         if results:
             # Create DataFrame
             df = pd.DataFrame(results)
             
-            # Reorder columns to have PDF Filename first, then questions
+            # Reorder columns
             columns = ["PDF Filename"] + self.questions
             df = df[columns]
             
             # Save to Excel
             df.to_excel(output_excel, index=False)
-            print(f"Results saved to {output_excel}")
+            print(f"\nResults saved to {output_excel}")
+            
+            # Print summary statistics
+            print(f"\nSummary:")
+            print(f"Total PDFs processed: {len(results)}")
+            
+            for question in self.questions:
+                found_count = sum(1 for r in results if r[question] not in ["Information not found", "Error: Could not extract text from PDF"])
+                print(f"{question[:50]}...: {found_count}/{len(results)} found")
+        
         else:
             print("No results to save")
         
-        print(f"Total batch processing completed in {time.time() - batch_start_time:.2f} seconds")
-        print(f"Average time per PDF: {(time.time() - batch_start_time) / len(pdf_files):.2f} seconds")
+        total_time = time.time() - batch_start_time
+        print(f"\nTotal processing completed in {total_time:.2f} seconds")
+        print(f"Average time per PDF: {total_time/len(pdf_files):.2f} seconds")
 
 def main():
-    # Simple command line argument handling
     import argparse
-    parser = argparse.ArgumentParser(description="Fast Pattern-Based PDF Regulatory Information Extraction")
-    parser.add_argument("--pdf_dir", type=str, default="C:\\Users\\c-ManasA\\OneDrive - crisil.com\\Desktop\\New folder\\pdf's", help="Directory containing PDF files")
-    parser.add_argument("--output", type=str, default="fast_regulatory_info_results.xlsx", help="Output Excel file")
+    parser = argparse.ArgumentParser(description="Fast Rule-Based PDF Regulatory Information Extraction")
+    parser.add_argument("--pdf_dir", type=str, required=True, help="Directory containing PDF files")
+    parser.add_argument("--output", type=str, default="regulatory_info_fast_results.xlsx", help="Output Excel file")
     parser.add_argument("--single_pdf", type=str, default=None, help="Process a single PDF instead of a directory")
+    parser.add_argument("--parallel", action="store_true", help="Use parallel processing (default: serial)")
+    parser.add_argument("--workers", type=int, default=4, help="Number of parallel workers (default: 4)")
     args = parser.parse_args()
     
     try:
-        print("Starting Fast Pattern-Based PDF Regulatory Information Extraction")
+        print("Starting Fast PDF Regulatory Information Extraction")
         start_time = time.time()
         
         # Create pipeline
-        pipeline = FastPDFRegulatoryExtractor()
+        pipeline = PDFRegulatoryExtractorFast()
         
         # Process single PDF or directory
         if args.single_pdf:
             if not os.path.isfile(args.single_pdf):
                 print(f"PDF file not found: {args.single_pdf}")
                 return
-                
+            
             # Process single PDF
-            results = []
             pdf_file = os.path.basename(args.single_pdf)
             
             try:
                 # Process the PDF
                 answers = pipeline.process_pdf(args.single_pdf)
                 
-                # Add to results
-                result = {"PDF Filename": pdf_file}
-                result.update(answers)
-                results.append(result)
+                # Create results
+                results = [{"PDF Filename": pdf_file, **answers}]
                 
-                # Create a DataFrame and save to Excel
+                # Save to Excel
                 df = pd.DataFrame(results)
                 columns = ["PDF Filename"] + pipeline.questions
                 df = df[columns]
                 df.to_excel(args.output, index=False)
                 print(f"Results saved to {args.output}")
                 
+                # Print results
+                print("\nExtracted Information:")
+                for question, answer in answers.items():
+                    print(f"{question}: {answer}")
+                
             except Exception as e:
                 print(f"Error processing {args.single_pdf}: {e}")
+        
         else:
             # Process all PDFs in directory
-            pipeline.process_pdfs_batch(args.pdf_dir, args.output)
+            if args.parallel:
+                pipeline.process_pdfs_batch_parallel(args.pdf_dir, args.output, args.workers)
+            else:
+                pipeline.process_pdfs_batch_serial(args.pdf_dir, args.output)
         
-        print(f"Processing completed successfully in {time.time() - start_time:.2f} seconds!")
+        print(f"\nProcessing completed successfully in {time.time() - start_time:.2f} seconds!")
         
     except Exception as e:
         print(f"Pipeline error: {e}")
