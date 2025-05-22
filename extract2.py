@@ -82,32 +82,11 @@ class PatternBasedExtractor:
                 r'Primary service[:\s]*([^\n\r]{10,150})',
             ],
             "Turnover of highest contributing product or service (in Rupees)": [
-                # Table-based patterns - most common in forms
-                r'Turnover of highest contributing product or service \(in Rupees\)[:\s]*([0-9,]+)',
-                r'Turnover of highest contributing product or service[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
-                
-                # Variations with line breaks and formatting
-                r'Turnover of highest[\s\n]*contributing[\s\n]*product or service[\s\n]*\(in Rupees\)[\s\n]*([0-9,]+)',
-                r'Turnover of highest[\s\n]*contributing[\s\n]*product or service[\s\n]*(?:Rs\.?|₹)?\s*([0-9,]+)',
-                
-                # Shortened versions
-                r'Highest contributing.*turnover[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
-                r'Highest turnover[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
-                
-                # Table cell patterns (common in structured forms)
-                r'(?:Rs\.?|₹)?\s*([0-9,]{6,})\s*(?=\n|$)',  # Large numbers on their own line
-                r'\|\s*([0-9,]{6,})\s*\|',  # Numbers in table cells
-                r'\s([0-9]{6,})\s',  # 6+ digit numbers with spaces around them
-                
-                # Financial statement patterns
-                r'Revenue from operations[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
-                r'Sale of products[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
-                r'Total revenue[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
-                r'Net sales[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
-                
-                # Generic large number patterns (as fallback)
-                r'([0-9]{8,})',  # Any 8+ digit number
-                r'([0-9,]{10,})',  # Any 10+ character number with commas
+                r'Highest.*turnover[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
+                r'Main product.*turnover[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
+                r'Primary.*revenue[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
+                r'Highest contributing.*[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
+                r'Product sales[:\s]*(?:Rs\.?|₹)?\s*([0-9,]+)',
             ]
         }
         
@@ -120,7 +99,7 @@ class PatternBasedExtractor:
             "Turnover of the product or service category (in Rupees)": [10, 11, 12, 9, 8],
             "Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)": [10, 11, 12, 9, 8],
             "Description of the product or service": [10, 11, 12, 9, 8],
-            "Turnover of highest contributing product or service (in Rupees)": [10, 11, 12, 13, 9, 8, 7, 6]  # Expanded search for turnover
+            "Turnover of highest contributing product or service (in Rupees)": [10, 11, 12, 9, 8]
         }
     
     def extract_with_patterns(self, question: str, pages: List[Dict[str, Any]]) -> str:
@@ -134,10 +113,6 @@ class PatternBasedExtractor:
         
         # Get preferred pages for this question
         preferred_pages = self.page_preferences.get(question, [1, 2, 3])
-        
-        # Special handling for the problematic last column
-        if "Turnover of highest contributing product or service" in question:
-            return self._extract_highest_turnover_special(pages)
         
         # Search in preferred pages first
         for page_num in preferred_pages:
@@ -228,94 +203,14 @@ class PatternBasedExtractor:
             return len(result) == 8 and result.isdigit()
         
         elif "turnover" in question.lower():
-            # Special handling for turnover amounts
-            if "highest" in question.lower():
-                # For highest turnover, be more lenient with validation
-                # Accept any number with 6+ digits (reasonable turnover amount)
-                cleaned_digits = re.sub(r'[^\d]', '', result)
-                return len(cleaned_digits) >= 6 and cleaned_digits.isdigit()
-            else:
-                # Regular turnover validation
-                return result.isdigit() and len(result) > 0
+            # Should be numeric
+            return result.isdigit() and len(result) > 0
         
         elif "description" in question.lower():
             # Should have reasonable length
             return 5 <= len(result) <= 150
         
         return True
-    
-    def _extract_highest_turnover_special(self, pages: List[Dict[str, Any]]) -> str:
-        """Special extraction method for highest turnover with aggressive pattern matching"""
-        
-        # Extended page search for turnover data
-        search_pages = [10, 11, 12, 13, 9, 8, 7, 6, 14, 15]
-        
-        # Multiple extraction strategies
-        strategies = [
-            # Strategy 1: Look for exact question match with number following
-            r'Turnover of highest contributing product or service.*?([0-9,]{6,})',
-            
-            # Strategy 2: Look for the question in a table format
-            r'Turnover of highest[\s\S]*?([0-9,]{6,})',
-            
-            # Strategy 3: Look for large numbers near "highest" or "turnover"
-            r'(?:highest|turnover)[\s\S]{0,100}?([0-9,]{8,})',
-            
-            # Strategy 4: Look for numbers in specific ranges (typical turnover amounts)
-            r'([0-9,]{8,})',  # Any 8+ digit number
-            
-            # Strategy 5: Look for numbers with specific formatting patterns
-            r'(\d{1,3},\d{2,3},\d{2,3},\d{3})',  # Pattern like 12,34,56,789
-            r'(\d{3,},\d{3,},\d{3,})',  # Pattern like 123,456,789
-        ]
-        
-        for page_num in search_pages:
-            if page_num <= len(pages):
-                page_text = pages[page_num - 1]["text"]
-                
-                # Try each strategy
-                for strategy in strategies:
-                    matches = re.finditer(strategy, page_text, re.IGNORECASE | re.DOTALL)
-                    
-                    for match in matches:
-                        candidate = match.group(1).strip()
-                        # Clean the candidate
-                        cleaned = re.sub(r'[^\d,]', '', candidate)
-                        numbers_only = cleaned.replace(',', '')
-                        
-                        # Validate: should be a reasonable turnover amount (6+ digits)
-                        if numbers_only.isdigit() and len(numbers_only) >= 6:
-                            # Additional validation: not too large (reasonable business turnover)
-                            try:
-                                amount = int(numbers_only)
-                                if 100000 <= amount <= 999999999999:  # Between 1 lakh and 99,999 crores
-                                    return numbers_only
-                            except ValueError:
-                                continue
-        
-        # If no specific match found, look for the largest number in the target pages
-        all_numbers = []
-        for page_num in search_pages:
-            if page_num <= len(pages):
-                page_text = pages[page_num - 1]["text"]
-                # Find all numbers with 6+ digits
-                numbers = re.findall(r'([0-9,]{6,})', page_text)
-                for num in numbers:
-                    cleaned_num = num.replace(',', '')
-                    if cleaned_num.isdigit() and len(cleaned_num) >= 6:
-                        try:
-                            amount = int(cleaned_num)
-                            if 100000 <= amount <= 999999999999:
-                                all_numbers.append((amount, cleaned_num))
-                        except ValueError:
-                            continue
-        
-        # Return the largest reasonable number found
-        if all_numbers:
-            all_numbers.sort(reverse=True)
-            return all_numbers[0][1]  # Return the string version of the largest number
-        
-        return "Information not found in the provided context"
 
 class FastPDFRegulatoryExtractor:
     """Fast pattern-based extractor for standardized forms"""
