@@ -5,339 +5,366 @@ import pandas as pd
 import fitz  # PyMuPDF
 from typing import Dict, List, Any, Optional
 
-class PDFExtractor:
-    """Class for extracting text from PDF files"""
+class PDFTextAnalyzer:
+    """Class to analyze and understand how PyMuPDF extracts text from your PDFs"""
     
-    def extract_text_from_pdf(self, pdf_path: str) -> List[Dict[str, Any]]:
-        """Extract text from each page of a PDF file"""
-        start_time = time.time()
+    def analyze_pdf_structure(self, pdf_path: str):
+        """Analyze the PDF structure and show exactly how text is extracted"""
+        print(f"\n{'='*60}")
+        print(f"ANALYZING PDF: {pdf_path}")
+        print(f"{'='*60}")
+        
         try:
             doc = fitz.open(pdf_path)
-            pages = []
-            for page_num, page in enumerate(doc):
-                text = page.get_text()
-                pages.append({
-                    "page_num": page_num + 1,
-                    "text": text
-                })
-                
-            # Explicitly close the document to free memory
-            doc.close()
-            print(f"PDF text extraction took {time.time() - start_time:.2f} seconds")
-            return pages
-        except Exception as e:
-            print(f"PDF extraction error after {time.time() - start_time:.2f} seconds: {e}")
-            raise
-    
-    def extract_specific_pages(self, pdf_path: str, page_numbers: List[int]) -> Dict[int, str]:
-        """Extract text from specific pages only"""
-        start_time = time.time()
-        try:
-            doc = fitz.open(pdf_path)
-            extracted_pages = {}
+            print(f"Total pages in PDF: {len(doc)}")
             
-            for page_num in page_numbers:
-                if page_num <= len(doc):  # Check if page exists
-                    page = doc[page_num - 1]  # PyMuPDF uses 0-based indexing
-                    text = page.get_text()
-                    extracted_pages[page_num] = text
-                    print(f"Extracted {len(text)} characters from page {page_num}")
-                else:
-                    print(f"Page {page_num} does not exist in PDF")
-                    extracted_pages[page_num] = ""
+            # Analyze pages 1 and 10
+            for page_num in [1, 10]:
+                if page_num <= len(doc):
+                    print(f"\n{'-'*40}")
+                    print(f"PAGE {page_num} ANALYSIS")
+                    print(f"{'-'*40}")
                     
+                    page = doc[page_num - 1]
+                    
+                    # Get text using different methods
+                    text_default = page.get_text()
+                    text_dict = page.get_text("dict")
+                    text_blocks = page.get_text("blocks")
+                    
+                    print(f"Text length (default method): {len(text_default)} characters")
+                    print(f"Number of text blocks: {len(text_blocks)}")
+                    
+                    # Show raw text
+                    print(f"\nRAW TEXT (first 500 characters):")
+                    print(repr(text_default[:500]))
+                    
+                    print(f"\nFORMATTED TEXT:")
+                    print(text_default[:500])
+                    
+                    # Split by lines and analyze
+                    lines = text_default.split('\n')
+                    print(f"\nLINE-BY-LINE ANALYSIS (first 20 lines):")
+                    for i, line in enumerate(lines[:20]):
+                        if line.strip():  # Only show non-empty lines
+                            print(f"Line {i+1:2d}: '{line.strip()}'")
+                    
+                    # Look for specific patterns we expect
+                    print(f"\nPATTERN DETECTION:")
+                    
+                    # CIN patterns
+                    cin_matches = re.findall(r'[LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6}', text_default, re.IGNORECASE)
+                    if cin_matches:
+                        print(f"CIN patterns found: {cin_matches}")
+                    else:
+                        # Look for partial CIN patterns
+                        partial_cin = re.findall(r'[LU]\d+[A-Z]*\d*[A-Z]*\d*', text_default, re.IGNORECASE)
+                        if partial_cin:
+                            print(f"Partial CIN-like patterns: {partial_cin}")
+                        else:
+                            print("No CIN patterns found")
+                    
+                    # Year patterns
+                    year_patterns = re.findall(r'\d{4}[-/]\d{2,4}', text_default)
+                    if year_patterns:
+                        print(f"Year patterns found: {year_patterns}")
+                    else:
+                        # Look for just years
+                        years = re.findall(r'20\d{2}', text_default)
+                        if years:
+                            print(f"Years found: {years}")
+                        else:
+                            print("No year patterns found")
+                    
+                    # Number patterns (4 digits, 8 digits, large numbers)
+                    four_digit = re.findall(r'\b\d{4}\b', text_default)
+                    eight_digit = re.findall(r'\b\d{8}\b', text_default)
+                    large_numbers = re.findall(r'\b\d{6,}\b', text_default)
+                    
+                    print(f"4-digit numbers: {four_digit[:10] if len(four_digit) > 10 else four_digit}")
+                    print(f"8-digit numbers: {eight_digit[:5] if len(eight_digit) > 5 else eight_digit}")
+                    print(f"Large numbers (6+ digits): {large_numbers[:10] if len(large_numbers) > 10 else large_numbers}")
+                    
+                    # Look for currency and financial terms
+                    financial_terms = re.findall(r'(?:rs|rupees|₹|turnover|revenue|sales)[\s\.:]*(\d+(?:,\d{3})*)', text_default, re.IGNORECASE)
+                    if financial_terms:
+                        print(f"Financial figures: {financial_terms}")
+                    
+                    print(f"\nALL NUMBERS FOUND ON PAGE {page_num}:")
+                    all_numbers = re.findall(r'\d+(?:,\d{3})*(?:\.\d+)?', text_default)
+                    print(f"Total numbers found: {len(all_numbers)}")
+                    if all_numbers:
+                        print(f"First 20 numbers: {all_numbers[:20]}")
+                        # Show unique numbers
+                        unique_numbers = list(set(all_numbers))
+                        unique_numbers.sort(key=lambda x: len(x), reverse=True)
+                        print(f"Longest numbers: {unique_numbers[:10]}")
+                
+                else:
+                    print(f"Page {page_num} does not exist in this PDF")
+            
             doc.close()
-            print(f"Specific pages extraction took {time.time() - start_time:.2f} seconds")
-            return extracted_pages
+            
         except Exception as e:
-            print(f"PDF extraction error after {time.time() - start_time:.2f} seconds: {e}")
-            raise
+            print(f"Error analyzing PDF: {e}")
 
-class FormFieldExtractor:
-    """Class for extracting specific form fields using flexible pattern matching"""
+class SmartFieldExtractor:
+    """Extract fields based on actual text patterns found in PDFs"""
     
     def __init__(self):
-        # More flexible patterns that look for common keywords and nearby values
-        self.field_keywords = {
-            "Corporate identity number (CIN) of company": [
-                "cin", "corporate identity", "corporate identification", 
-                "company identification", "registration number"
-            ],
-            "Financial year to which financial statements relates": [
-                "financial year", "fy", "year ended", "period ended", 
-                "financial period", "accounting year", "reporting period"
-            ],
-            "Product or service category code (ITC/ NPCS 4 digit code)": [
-                "itc", "npcs", "product code", "service code", "category code",
-                "business code", "activity code", "classification code"
-            ],
-            "Description of the product or service category": [
-                "product category", "service category", "business segment",
-                "main business", "principal business", "nature of business",
-                "business activity", "product description", "service description"
-            ],
-            "Turnover of the product or service category (in Rupees)": [
-                "category turnover", "segment turnover", "product turnover",
-                "service turnover", "revenue", "sales", "income"
-            ],
-            "Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)": [
-                "highest turnover", "main product", "primary product",
-                "major product", "principal product", "8 digit", "eight digit"
-            ],
-            "Description of the product or service": [
-                "main product", "primary service", "principal business",
-                "highest contributing", "major business", "core business"
-            ],
-            "Turnover of highest contributing product or service (in Rupees)": [
-                "highest turnover", "main turnover", "primary turnover",
-                "principal turnover", "major turnover", "maximum turnover",
-                "highest revenue", "main revenue", "primary revenue"
-            ]
-        }
+        self.debug = True
     
-    def extract_field_value(self, text: str, field_name: str) -> str:
-        """Extract field value using flexible keyword-based search"""
-        print(f"Searching for: {field_name}")
+    def extract_all_fields(self, text: str, page_num: int) -> Dict[str, str]:
+        """Extract all fields from the given text"""
         
-        # Get keywords for this field
-        keywords = self.field_keywords.get(field_name, [])
+        if self.debug:
+            print(f"\nEXTRACTING FROM PAGE {page_num}")
+            print(f"Text length: {len(text)} characters")
         
-        # Clean and normalize text for better matching
-        normalized_text = self._normalize_text(text)
+        results = {}
         
-        # Try different extraction strategies
-        strategies = [
-            self._extract_by_keywords_and_patterns,
-            self._extract_by_proximity_search,
-            self._extract_by_line_analysis,
-            self._extract_by_context_matching
-        ]
+        # 1. Corporate Identity Number (CIN)
+        results["Corporate identity number (CIN) of company"] = self._extract_cin(text)
         
-        for strategy in strategies:
-            result = strategy(normalized_text, field_name, keywords)
-            if result and result != "Information not found":
-                print(f"Found using strategy {strategy.__name__}: {result}")
+        # 2. Financial Year
+        results["Financial year to which financial statements relates"] = self._extract_financial_year(text)
+        
+        # 3. Product/Service Category Code (4 digit)
+        results["Product or service category code (ITC/ NPCS 4 digit code)"] = self._extract_4_digit_code(text)
+        
+        # 4. Description of product/service category
+        results["Description of the product or service category"] = self._extract_category_description(text)
+        
+        # 5. Category turnover
+        results["Turnover of the product or service category (in Rupees)"] = self._extract_category_turnover(text)
+        
+        # 6. Highest contributing product code (8 digit)
+        results["Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)"] = self._extract_8_digit_code(text)
+        
+        # 7. Description of highest contributing product
+        results["Description of the product or service"] = self._extract_product_description(text)
+        
+        # 8. Highest contributing turnover
+        results["Turnover of highest contributing product or service (in Rupees)"] = self._extract_highest_turnover(text)
+        
+        return results
+    
+    def _extract_cin(self, text: str) -> str:
+        """Extract CIN with multiple fallback strategies"""
+        
+        # Strategy 1: Perfect CIN format
+        cin_match = re.search(r'([LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})', text, re.IGNORECASE)
+        if cin_match:
+            result = cin_match.group(1).upper()
+            if self.debug:
+                print(f"CIN found (perfect format): {result}")
+            return result
+        
+        # Strategy 2: CIN with separators
+        cin_sep_match = re.search(r'([LU][-\s]?\d{5}[-\s]?[A-Z]{2}[-\s]?\d{4}[-\s]?[A-Z]{3}[-\s]?\d{6})', text, re.IGNORECASE)
+        if cin_sep_match:
+            result = re.sub(r'[^A-Z0-9]', '', cin_sep_match.group(1).upper())
+            if self.debug:
+                print(f"CIN found (with separators): {result}")
+            return result
+        
+        # Strategy 3: Look for any L/U followed by numbers and letters
+        partial_cin = re.search(r'([LU]\d+[A-Z]*\d+[A-Z]*\d+)', text, re.IGNORECASE)
+        if partial_cin:
+            result = partial_cin.group(1).upper()
+            if len(result) >= 15:  # Reasonable CIN length
+                if self.debug:
+                    print(f"CIN found (partial): {result}")
                 return result
         
-        print(f"No value found for {field_name}")
+        if self.debug:
+            print("CIN not found")
         return "Information not found"
     
-    def _normalize_text(self, text: str) -> str:
-        """Normalize text for better pattern matching"""
-        # Remove extra whitespace and normalize line breaks
-        text = re.sub(r'\s+', ' ', text)
-        # Keep original text structure but clean it
-        return text.strip()
+    def _extract_financial_year(self, text: str) -> str:
+        """Extract financial year"""
+        
+        # Strategy 1: Standard FY format
+        fy_match = re.search(r'(\d{4}[-/]\d{2,4})', text)
+        if fy_match:
+            result = fy_match.group(1)
+            if self.debug:
+                print(f"Financial year found: {result}")
+            return result
+        
+        # Strategy 2: Look for consecutive years
+        years = re.findall(r'20\d{2}', text)
+        if len(years) >= 2:
+            # Try to find consecutive years
+            for i in range(len(years) - 1):
+                year1 = int(years[i])
+                year2 = int(years[i + 1])
+                if year2 == year1 + 1:
+                    result = f"{year1}-{str(year2)[2:]}"
+                    if self.debug:
+                        print(f"Financial year found (consecutive years): {result}")
+                    return result
+        
+        if self.debug:
+            print("Financial year not found")
+        return "Information not found"
     
-    def _extract_by_keywords_and_patterns(self, text: str, field_name: str, keywords: List[str]) -> str:
-        """Extract using keyword proximity and common patterns"""
+    def _extract_4_digit_code(self, text: str) -> str:
+        """Extract 4-digit product/service code"""
         
-        if "CIN" in field_name or "corporate identity" in field_name.lower():
-            # Look for CIN patterns
-            cin_patterns = [
-                r'([LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})',
-                r'CIN[:\s]*([LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})',
-                r'([LU]-?\d{5}-?[A-Z]{2}-?\d{4}-?[A-Z]{3}-?\d{6})'
-            ]
-            for pattern in cin_patterns:
-                match = re.search(pattern, text, re.IGNORECASE)
-                if match:
-                    return re.sub(r'[^A-Z0-9]', '', match.group(1).upper())
+        # Find all 4-digit numbers
+        four_digits = re.findall(r'\b(\d{4})\b', text)
         
-        elif "financial year" in field_name.lower():
-            # Look for year patterns
-            year_patterns = [
-                r'(\d{4}[-/]\d{2,4})',
-                r'FY\s*(\d{4}[-/]\d{2,4})',
-                r'year\s*(\d{4}[-/]\d{2,4})',
-                r'(\d{4}\s*-\s*\d{2,4})'
-            ]
-            for pattern in year_patterns:
-                match = re.search(pattern, text, re.IGNORECASE)
-                if match:
-                    return match.group(1)
-        
-        elif "4 digit code" in field_name:
-            # Look for 4-digit codes
-            four_digit_patterns = [
-                r'(?:ITC|NPCS|code)[:\s]*(\d{4})',
-                r'(\d{4})\s*(?:ITC|NPCS)',
-                r'\b(\d{4})\b'
-            ]
-            for pattern in four_digit_patterns:
-                matches = re.findall(pattern, text, re.IGNORECASE)
-                if matches:
-                    return matches[0]
-        
-        elif "8 digit code" in field_name:
-            # Look for 8-digit codes
-            eight_digit_patterns = [
-                r'(?:ITC|NPCS|code)[:\s]*(\d{8})',
-                r'(\d{8})\s*(?:ITC|NPCS)',
-                r'\b(\d{8})\b'
-            ]
-            for pattern in eight_digit_patterns:
-                matches = re.findall(pattern, text, re.IGNORECASE)
-                if matches:
-                    return matches[0]
-        
-        elif "turnover" in field_name.lower() and "highest" in field_name.lower():
-            # Look for numerical values that could be turnover
-            turnover_patterns = [
-                r'(\d{1,3}(?:,\d{3})*)',  # Numbers with commas
-                r'(\d+)',  # Any digits
-                r'Rs\.?\s*(\d{1,3}(?:,\d{3})*)',  # With Rs.
-                r'₹\s*(\d{1,3}(?:,\d{3})*)'  # With rupee symbol
-            ]
+        if four_digits:
+            # Filter out years and common non-code numbers
+            filtered = []
+            for code in four_digits:
+                num = int(code)
+                if not (1900 <= num <= 2030):  # Not a year
+                    filtered.append(code)
             
-            for pattern in turnover_patterns:
-                matches = re.findall(pattern, text)
-                if matches:
-                    # Return the largest number found (likely the turnover)
-                    numbers = [int(match.replace(',', '')) for match in matches if match.replace(',', '').isdigit()]
-                    if numbers:
-                        largest = max(numbers)
-                        return str(largest)
+            if filtered:
+                result = filtered[0]  # Take the first valid one
+                if self.debug:
+                    print(f"4-digit code found: {result} (from {four_digits})")
+                return result
         
-        return ""
+        if self.debug:
+            print("4-digit code not found")
+        return "Information not found"
     
-    def _extract_by_proximity_search(self, text: str, field_name: str, keywords: List[str]) -> str:
-        """Search for values near keywords"""
+    def _extract_8_digit_code(self, text: str) -> str:
+        """Extract 8-digit product/service code"""
+        
+        # Find all 8-digit numbers
+        eight_digits = re.findall(r'\b(\d{8})\b', text)
+        
+        if eight_digits:
+            result = eight_digits[0]
+            if self.debug:
+                print(f"8-digit code found: {result}")
+            return result
+        
+        if self.debug:
+            print("8-digit code not found")
+        return "Information not found"
+    
+    def _extract_category_description(self, text: str) -> str:
+        """Extract description of product/service category"""
+        
+        # Look for business-related descriptive text
+        keywords = ['manufacture', 'production', 'service', 'trading', 'business', 'activity', 'operations']
+        
         lines = text.split('\n')
+        for line in lines:
+            line = line.strip()
+            if len(line) > 20 and any(keyword in line.lower() for keyword in keywords):
+                # Clean the line
+                cleaned = re.sub(r'[^\w\s,.-]', '', line)
+                if len(cleaned) > 10:
+                    result = cleaned[:100]  # Limit length
+                    if self.debug:
+                        print(f"Category description found: {result}")
+                    return result
         
-        for i, line in enumerate(lines):
-            line_lower = line.lower()
-            
-            # Check if any keyword is in this line
-            for keyword in keywords:
-                if keyword in line_lower:
-                    # Look for values in this line and nearby lines
-                    search_lines = []
-                    
-                    # Current line
-                    search_lines.append(line)
-                    
-                    # Previous and next lines
-                    if i > 0:
-                        search_lines.append(lines[i-1])
-                    if i < len(lines) - 1:
-                        search_lines.append(lines[i+1])
-                    
-                    combined_context = ' '.join(search_lines)
-                    
-                    # Extract based on field type
-                    if "CIN" in field_name:
-                        cin_match = re.search(r'([LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})', combined_context, re.IGNORECASE)
-                        if cin_match:
-                            return cin_match.group(1).upper()
-                    
-                    elif "financial year" in field_name.lower():
-                        year_match = re.search(r'(\d{4}[-/]\d{2,4})', combined_context)
-                        if year_match:
-                            return year_match.group(1)
-                    
-                    elif "code" in field_name.lower():
-                        if "4 digit" in field_name:
-                            code_match = re.search(r'\b(\d{4})\b', combined_context)
-                        else:
-                            code_match = re.search(r'\b(\d{8})\b', combined_context)
-                        if code_match:
-                            return code_match.group(1)
-                    
-                    elif "turnover" in field_name.lower():
-                        # Look for numbers
-                        numbers = re.findall(r'(\d{1,3}(?:,\d{3})*|\d+)', combined_context)
-                        if numbers:
-                            # Return the largest number
-                            nums = [int(n.replace(',', '')) for n in numbers if n.replace(',', '').isdigit()]
-                            if nums:
-                                return str(max(nums))
-                    
-                    elif "description" in field_name.lower():
-                        # Extract text after the keyword
-                        after_keyword = combined_context.split(keyword, 1)
-                        if len(after_keyword) > 1:
-                            desc = after_keyword[1].strip()
-                            # Clean and limit description
-                            desc = re.sub(r'[^\w\s,.-]', '', desc)[:100]
-                            return desc.strip()
-        
-        return ""
+        if self.debug:
+            print("Category description not found")
+        return "Information not found"
     
-    def _extract_by_line_analysis(self, text: str, field_name: str, keywords: List[str]) -> str:
-        """Analyze each line for potential values"""
+    def _extract_product_description(self, text: str) -> str:
+        """Extract description of main product/service"""
+        
+        # Similar to category description but look for more specific terms
+        keywords = ['product', 'service', 'main', 'primary', 'principal', 'major']
+        
         lines = text.split('\n')
+        for line in lines:
+            line = line.strip()
+            if len(line) > 15 and any(keyword in line.lower() for keyword in keywords):
+                cleaned = re.sub(r'[^\w\s,.-]', '', line)
+                if len(cleaned) > 10:
+                    result = cleaned[:100]
+                    if self.debug:
+                        print(f"Product description found: {result}")
+                    return result
         
-        if "CIN" in field_name:
-            for line in lines:
-                cin_match = re.search(r'([LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})', line, re.IGNORECASE)
-                if cin_match:
-                    return cin_match.group(1).upper()
-        
-        elif "financial year" in field_name.lower():
-            for line in lines:
-                year_match = re.search(r'(\d{4}[-/]\d{2,4})', line)
-                if year_match:
-                    return year_match.group(1)
-        
-        elif "turnover" in field_name.lower() and "highest" in field_name.lower():
-            # Look for lines with large numbers
-            max_number = 0
-            for line in lines:
-                numbers = re.findall(r'(\d{6,})', line)  # Look for numbers with at least 6 digits
-                for num in numbers:
-                    try:
-                        val = int(num.replace(',', ''))
-                        if val > max_number:
-                            max_number = val
-                    except:
-                        continue
-            
-            if max_number > 0:
-                return str(max_number)
-        
-        return ""
+        if self.debug:
+            print("Product description not found")
+        return "Information not found"
     
-    def _extract_by_context_matching(self, text: str, field_name: str, keywords: List[str]) -> str:
-        """Try to extract based on document context and common form layouts"""
+    def _extract_category_turnover(self, text: str) -> str:
+        """Extract category turnover"""
         
-        # For numerical fields, try to find the largest reasonable number
-        if "turnover" in field_name.lower() and "highest" in field_name.lower():
-            # Find all large numbers in the text
-            all_numbers = re.findall(r'\b(\d{6,})\b', text)
-            if all_numbers:
-                # Convert to integers and find the largest
-                numbers = []
-                for num in all_numbers:
-                    try:
-                        numbers.append(int(num.replace(',', '')))
-                    except:
-                        continue
+        # Look for medium-sized numbers (not the largest ones)
+        numbers = re.findall(r'\b(\d{1,3}(?:,\d{3})*|\d{6,10})\b', text)
+        
+        if numbers:
+            # Convert to integers for comparison
+            num_values = []
+            for num in numbers:
+                try:
+                    clean_num = num.replace(',', '')
+                    if clean_num.isdigit():
+                        val = int(clean_num)
+                        if 100000 <= val <= 100000000:  # Reasonable range for category turnover
+                            num_values.append((val, num))
+                except:
+                    continue
+            
+            if num_values:
+                # Sort and take a middle value (not the largest, not the smallest)
+                num_values.sort()
+                if len(num_values) >= 3:
+                    result = str(num_values[len(num_values)//2][0])
+                else:
+                    result = str(num_values[0][0])
                 
-                if numbers:
-                    return str(max(numbers))
+                if self.debug:
+                    print(f"Category turnover found: {result}")
+                return result
         
-        # For code fields, look for any 4 or 8 digit sequences
-        elif "4 digit code" in field_name:
-            codes = re.findall(r'\b(\d{4})\b', text)
-            if codes:
-                return codes[0]  # Return first 4-digit code found
+        if self.debug:
+            print("Category turnover not found")
+        return "Information not found"
+    
+    def _extract_highest_turnover(self, text: str) -> str:
+        """Extract highest contributing product/service turnover"""
         
-        elif "8 digit code" in field_name:
-            codes = re.findall(r'\b(\d{8})\b', text)
-            if codes:
-                return codes[0]  # Return first 8-digit code found
+        # Look for the largest numbers in the text
+        numbers = re.findall(r'\b(\d{1,3}(?:,\d{3})*|\d{6,})\b', text)
         
-        return ""
+        if numbers:
+            max_val = 0
+            max_num = ""
+            
+            for num in numbers:
+                try:
+                    clean_num = num.replace(',', '')
+                    if clean_num.isdigit():
+                        val = int(clean_num)
+                        if val > max_val and val >= 1000000:  # At least 1 million
+                            max_val = val
+                            max_num = str(val)
+                except:
+                    continue
+            
+            if max_num:
+                if self.debug:
+                    print(f"Highest turnover found: {max_num}")
+                return max_num
+        
+        if self.debug:
+            print("Highest turnover not found")
+        return "Information not found"
 
 class PDFFormExtractor:
     """Main class for extracting form data from scanned PDFs"""
     
-    def __init__(self):
-        self.pdf_extractor = PDFExtractor()
-        self.field_extractor = FormFieldExtractor()
+    def __init__(self, debug_mode=True):
+        self.debug_mode = debug_mode
+        self.analyzer = PDFTextAnalyzer()
+        self.extractor = SmartFieldExtractor()
         
-        # Define the specific fields to extract
         self.fields = [
             "Corporate identity number (CIN) of company",
             "Financial year to which financial statements relates",
@@ -348,64 +375,42 @@ class PDFFormExtractor:
             "Description of the product or service",
             "Turnover of highest contributing product or service (in Rupees)"
         ]
-        
-        # Pages to search for each field
-        self.field_pages = {
-            "Corporate identity number (CIN) of company": [1],
-            "Financial year to which financial statements relates": [1],
-            "Product or service category code (ITC/ NPCS 4 digit code)": [1, 10],
-            "Description of the product or service category": [1, 10],
-            "Turnover of the product or service category (in Rupees)": [10],
-            "Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)": [10],
-            "Description of the product or service": [10],
-            "Turnover of highest contributing product or service (in Rupees)": [10]
-        }
+    
+    def analyze_single_pdf(self, pdf_path: str):
+        """Analyze a single PDF to understand its structure"""
+        self.analyzer.analyze_pdf_structure(pdf_path)
     
     def process_pdf(self, pdf_path: str) -> Dict[str, str]:
         """Process a single PDF file and extract form data"""
-        total_start_time = time.time()
-        print(f"Processing PDF: {pdf_path}")
+        print(f"\nProcessing PDF: {pdf_path}")
         
         try:
-            # Extract text from pages 1 and 10 only
-            pages_text = self.pdf_extractor.extract_specific_pages(pdf_path, [1, 10])
+            doc = fitz.open(pdf_path)
             
-            # Debug: Print sample text from each page
-            for page_num, text in pages_text.items():
-                print(f"Page {page_num} sample text (first 200 chars): {text[:200]}...")
+            # Extract text from pages 1 and 10
+            all_results = {}
             
-            # Store results
-            results = {}
+            for page_num in [1, 10]:
+                if page_num <= len(doc):
+                    page = doc[page_num - 1]
+                    text = page.get_text()
+                    
+                    if text.strip():
+                        page_results = self.extractor.extract_all_fields(text, page_num)
+                        
+                        # Merge results, preferring non-"Information not found" values
+                        for field, value in page_results.items():
+                            if field not in all_results or all_results[field] == "Information not found":
+                                all_results[field] = value
             
-            # Process each field
+            doc.close()
+            
+            # Ensure all fields are present
+            final_results = {}
             for field in self.fields:
-                field_start_time = time.time()
-                print(f"\nExtracting: {field}")
-                
-                # Get pages to search for this field
-                search_pages = self.field_pages.get(field, [1, 10])
-                
-                # Combine text from relevant pages
-                combined_text = ""
-                for page_num in search_pages:
-                    if page_num in pages_text and pages_text[page_num]:
-                        combined_text += f"\n--- Page {page_num} ---\n"
-                        combined_text += pages_text[page_num]
-                
-                if not combined_text.strip():
-                    print(f"  No text found in pages {search_pages}")
-                    results[field] = "No text found in target pages"
-                    continue
-                
-                # Extract field value
-                value = self.field_extractor.extract_field_value(combined_text, field)
-                results[field] = value
-                
-                print(f"  Result: {value}")
-                print(f"  Extraction took {time.time() - field_start_time:.2f} seconds")
+                final_results[field] = all_results.get(field, "Information not found")
             
-            print(f"\nCompleted processing {pdf_path} in {time.time() - total_start_time:.2f} seconds")
-            return results
+            return final_results
             
         except Exception as e:
             print(f"Error processing PDF {pdf_path}: {e}")
@@ -413,15 +418,12 @@ class PDFFormExtractor:
     
     def process_pdfs_batch(self, pdf_dir: str, output_excel: str):
         """Process multiple PDF files and save results to Excel"""
-        batch_start_time = time.time()
         print(f"Processing all PDFs in directory: {pdf_dir}")
         
-        # Check if directory exists
         if not os.path.isdir(pdf_dir):
             print(f"Directory not found: {pdf_dir}")
             return
         
-        # Get all PDF files
         pdf_files = [f for f in os.listdir(pdf_dir) if f.lower().endswith('.pdf')]
         
         if not pdf_files:
@@ -430,96 +432,63 @@ class PDFFormExtractor:
         
         print(f"Found {len(pdf_files)} PDF files")
         
-        # Process each PDF
         results = []
         
         for pdf_file in pdf_files:
             pdf_path = os.path.join(pdf_dir, pdf_file)
-            try:
-                pdf_start_time = time.time()
-                extracted_data = self.process_pdf(pdf_path)
-                
-                # Add filename to results
-                result = {"PDF Filename": pdf_file}
-                result.update(extracted_data)
-                results.append(result)
-                
-                print(f"Processed {pdf_file} in {time.time() - pdf_start_time:.2f} seconds")
-                
-            except Exception as e:
-                print(f"Error processing {pdf_file}: {e}")
-                # Add error entry
-                result = {"PDF Filename": pdf_file}
-                result.update({field: f"Error: {str(e)}" for field in self.fields})
-                results.append(result)
+            extracted_data = self.process_pdf(pdf_path)
+            
+            result = {"PDF Filename": pdf_file}
+            result.update(extracted_data)
+            results.append(result)
         
-        # Save results to Excel
+        # Save to Excel
         if results:
             df = pd.DataFrame(results)
-            
-            # Reorder columns
             columns = ["PDF Filename"] + self.fields
             df = df[columns]
-            
-            # Save to Excel
             df.to_excel(output_excel, index=False)
             print(f"Results saved to {output_excel}")
-            print(f"Processed {len(results)} PDFs successfully")
-        else:
-            print("No results to save")
-        
-        print(f"Total batch processing completed in {time.time() - batch_start_time:.2f} seconds")
 
 def main():
-    """Main function with command line argument handling"""
+    """Main function"""
     import argparse
     
-    parser = argparse.ArgumentParser(description="PDF Form Data Extractor for Scanned Forms")
+    parser = argparse.ArgumentParser(description="Smart PDF Form Data Extractor")
     parser.add_argument("--pdf_dir", type=str, 
                        default="C:\\Users\\c-ManasA\\OneDrive - crisil.com\\Desktop\\New folder\\pdf's", 
                        help="Directory containing PDF files")
     parser.add_argument("--output", type=str, 
-                       default="form_extraction_results.xlsx", 
+                       default="smart_extraction_results.xlsx", 
                        help="Output Excel file")
     parser.add_argument("--single_pdf", type=str, default=None, 
-                       help="Process a single PDF instead of a directory")
+                       help="Process a single PDF")
+    parser.add_argument("--analyze_only", action="store_true", 
+                       help="Only analyze PDF structure, don't extract data")
     
     args = parser.parse_args()
     
-    try:
-        print("Starting PDF Form Data Extraction")
-        start_time = time.time()
-        
-        # Create extractor
-        extractor = PDFFormExtractor()
-        
-        if args.single_pdf:
-            # Process single PDF
-            if not os.path.isfile(args.single_pdf):
-                print(f"PDF file not found: {args.single_pdf}")
-                return
-            
-            pdf_file = os.path.basename(args.single_pdf)
+    extractor = PDFFormExtractor(debug_mode=True)
+    
+    if args.single_pdf:
+        if args.analyze_only:
+            # Just analyze the structure
+            extractor.analyze_single_pdf(args.single_pdf)
+        else:
+            # Analyze and then extract
+            extractor.analyze_single_pdf(args.single_pdf)
             extracted_data = extractor.process_pdf(args.single_pdf)
             
             # Save results
+            pdf_file = os.path.basename(args.single_pdf)
             result = {"PDF Filename": pdf_file}
             result.update(extracted_data)
             
             df = pd.DataFrame([result])
-            columns = ["PDF Filename"] + extractor.fields
-            df = df[columns]
             df.to_excel(args.output, index=False)
             print(f"Results saved to {args.output}")
-            
-        else:
-            # Process directory
-            extractor.process_pdfs_batch(args.pdf_dir, args.output)
-        
-        print(f"Processing completed successfully in {time.time() - start_time:.2f} seconds!")
-        
-    except Exception as e:
-        print(f"Pipeline error: {e}")
+    else:
+        extractor.process_pdfs_batch(args.pdf_dir, args.output)
 
 if __name__ == "__main__":
     main()
