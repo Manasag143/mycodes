@@ -10,296 +10,10 @@ import time
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class PDFExtractor:
-    """Class for extracting text from PDF files"""
-    
-    def extract_text_from_pdf(self, pdf_path: str) -> List[Dict[str, Any]]:
-        """Extract text from each page of a PDF file"""
-        start_time = time.time()
-        try:
-            doc = fitz.open(pdf_path)
-            pages = []
-            for page_num, page in enumerate(doc):
-                text = page.get_text()
-                pages.append({
-                    "page_num": page_num + 1,
-                    "text": text
-                })
-                
-            doc.close()
-            print(f"PDF text extraction took {time.time() - start_time:.2f} seconds")
-            return pages
-        except Exception as e:
-            print(f"PDF extraction error after {time.time() - start_time:.2f} seconds: {e}")
-            raise
-    
-    def search_keywords_in_pdf(self, pages: List[Dict[str, Any]], keywords: List[str], question: str) -> List[int]:
-        """Search for keywords with optimized pattern matching"""
-        start_time = time.time()
-        relevant_pages = []
-        
-        # First try to find pages with exact question mentions
-        question_keywords = [
-            question,
-            re.sub(r'(of company|to which|relates|code|in Rupees)', '', question).strip()
-        ]
-        
-        # Search for the complete question or its main part first
-        for page in pages:
-            for q_keyword in question_keywords:
-                if len(q_keyword) > 10 and q_keyword.lower() in page["text"].lower():
-                    if page["page_num"] not in relevant_pages:
-                        relevant_pages.append(page["page_num"])
-        
-        # If we found pages with the exact question, prioritize those
-        if relevant_pages:
-            print(f"Keyword search took {time.time() - start_time:.2f} seconds (found exact match)")
-            return relevant_pages
-        
-        # Otherwise, fall back to simplified keyword-based search
-        for keyword in keywords:
-            for page in pages:
-                if keyword.lower() in page["text"].lower():
-                    if page["page_num"] not in relevant_pages:
-                        relevant_pages.append(page["page_num"])
-        
-        print(f"Keyword search took {time.time() - start_time:.2f} seconds (found {len(relevant_pages)} pages)")
-        return relevant_pages
-
-class AnswerExtractor:
-    """Class for extracting answers using pattern matching and rule-based extraction"""
+class PDFDebugger:
+    """Class specifically for debugging PDF content and understanding structure"""
     
     def __init__(self):
-        # Define extraction patterns for different question types
-        self.patterns = {
-            'cin': [
-                r'[LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6}',  # Standard CIN format
-                r'CIN[:\s]+([LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})',
-                r'Corporate Identity Number[:\s]+([LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})'
-            ],
-            'financial_year': [
-                r'(?:FY|F\.Y\.|Financial Year)[:\s]*(\d{4}[-/]\d{2,4})',
-                r'(?:year ended|period ended)[:\s]*(\d{1,2}[a-zA-Z]*\s+\w+\s+\d{4})',
-                r'(\d{4}[-/]\d{2,4})',
-                r'for the year (\d{4}[-/]\d{2,4})',
-                r'ended (\d{1,2}\w*\s+\w+\s+\d{4})'
-            ],
-            'product_code_4': [
-                r'(?:ITC|NPCS|Product Code|Service Code)[:\s]*(\d{4})\b',
-                r'4\s*digit\s*code[:\s]*(\d{4})',
-                r'\b(\d{4})\b(?=\s*(?:ITC|NPCS|code))',
-                r'Category.*?(\d{4})',
-                r'Code[:\s]*(\d{4})\b'
-            ],
-            'product_code_8': [
-                r'(?:ITC|NPCS|Product Code|Service Code)[:\s]*(\d{8})\b',
-                r'8\s*digit\s*code[:\s]*(\d{8})',
-                r'\b(\d{8})\b(?=\s*(?:ITC|NPCS|code))',
-                r'highest.*?contributing.*?(\d{8})',
-                r'main.*?product.*?(\d{8})'
-            ],
-            'turnover': [
-                r'(?:Rs\.?|₹|INR)[\s]*([0-9,]+\.?\d*)',
-                r'turnover[:\s]*(?:Rs\.?|₹|INR)?[\s]*([0-9,]+\.?\d*)',
-                r'revenue[:\s]*(?:Rs\.?|₹|INR)?[\s]*([0-9,]+\.?\d*)',
-                r'([0-9,]+\.?\d*)\s*(?:crore|lakh|million|billion)',
-                r'(\d{1,3}(?:,\d{3})*(?:\.\d+)?)'
-            ]
-        }
-    
-    def extract_answer(self, question: str, context: str) -> str:
-        """Extract answer using pattern matching and contextual analysis"""
-        if not context or not context.strip():
-            return "Information not found"
-        
-        # Determine question type and apply appropriate extraction
-        question_lower = question.lower()
-        
-        if "cin" in question_lower or "corporate identity" in question_lower:
-            return self._extract_cin(context)
-        elif "financial year" in question_lower:
-            return self._extract_financial_year(context)
-        elif "4 digit code" in question_lower:
-            return self._extract_product_code_4(context)
-        elif "8 digit code" in question_lower:
-            return self._extract_product_code_8(context)
-        elif "turnover" in question_lower and "category" in question_lower:
-            return self._extract_category_turnover(context)
-        elif "turnover" in question_lower and "highest" in question_lower:
-            return self._extract_highest_turnover(context)
-        elif "description" in question_lower and "category" in question_lower:
-            return self._extract_category_description(context)
-        elif "description" in question_lower and ("highest" in question_lower or "service" in question_lower):
-            return self._extract_service_description(context)
-        else:
-            return self._extract_generic(context, question)
-    
-    def _extract_cin(self, context: str) -> str:
-        """Extract Corporate Identity Number"""
-        for pattern in self.patterns['cin']:
-            matches = re.findall(pattern, context, re.IGNORECASE)
-            if matches:
-                # Return the first valid CIN found
-                cin = matches[0] if isinstance(matches[0], str) else matches[0]
-                if len(cin) == 21:  # Standard CIN length
-                    return cin
-        return "Information not found"
-    
-    def _extract_financial_year(self, context: str) -> str:
-        """Extract financial year"""
-        for pattern in self.patterns['financial_year']:
-            matches = re.findall(pattern, context, re.IGNORECASE)
-            if matches:
-                return matches[0]
-        return "Information not found"
-    
-    def _extract_product_code_4(self, context: str) -> str:
-        """Extract 4-digit product/service code"""
-        # Look for context lines that mention products/services with codes
-        lines = context.split('\n')
-        for line in lines:
-            if any(keyword in line.lower() for keyword in ['product', 'service', 'category', 'business']):
-                for pattern in self.patterns['product_code_4']:
-                    matches = re.findall(pattern, line, re.IGNORECASE)
-                    if matches:
-                        return matches[0]
-        
-        # Fallback: search entire context
-        for pattern in self.patterns['product_code_4']:
-            matches = re.findall(pattern, context, re.IGNORECASE)
-            if matches:
-                return matches[0]
-        
-        return "Information not found"
-    
-    def _extract_product_code_8(self, context: str) -> str:
-        """Extract 8-digit product/service code"""
-        # Look for context lines that mention highest contributing or main products
-        lines = context.split('\n')
-        for line in lines:
-            if any(keyword in line.lower() for keyword in ['highest', 'main', 'primary', 'contributing']):
-                for pattern in self.patterns['product_code_8']:
-                    matches = re.findall(pattern, line, re.IGNORECASE)
-                    if matches:
-                        return matches[0]
-        
-        # Fallback: search entire context
-        for pattern in self.patterns['product_code_8']:
-            matches = re.findall(pattern, context, re.IGNORECASE)
-            if matches:
-                return matches[0]
-        
-        return "Information not found"
-    
-    def _extract_category_turnover(self, context: str) -> str:
-        """Extract turnover of product/service category"""
-        return self._extract_turnover_amount(context, ['category', 'segment'])
-    
-    def _extract_highest_turnover(self, context: str) -> str:
-        """Extract turnover of highest contributing product/service"""
-        # Look for specific patterns related to highest turnover
-        lines = context.split('\n')
-        
-        # First try to find lines with "highest" or similar keywords
-        for line in lines:
-            if any(keyword in line.lower() for keyword in ['highest', 'maximum', 'main', 'primary']):
-                amount = self._extract_amount_from_line(line)
-                if amount:
-                    return amount
-        
-        # Look for table-like structures with amounts
-        return self._extract_turnover_amount(context, ['highest', 'maximum', 'main', 'primary'])
-    
-    def _extract_turnover_amount(self, context: str, context_keywords: List[str]) -> str:
-        """Extract monetary amounts with context"""
-        lines = context.split('\n')
-        
-        # Look for lines containing both context keywords and amounts
-        for line in lines:
-            line_lower = line.lower()
-            if any(keyword in line_lower for keyword in context_keywords):
-                amount = self._extract_amount_from_line(line)
-                if amount:
-                    return amount
-        
-        # Fallback: look for any monetary amount in context
-        for pattern in self.patterns['turnover']:
-            matches = re.findall(pattern, context, re.IGNORECASE)
-            if matches:
-                # Clean up the amount (remove commas, etc.)
-                amount = matches[0].replace(',', '')
-                if amount.replace('.', '').isdigit():
-                    return amount
-        
-        return "Information not found"
-    
-    def _extract_amount_from_line(self, line: str) -> Optional[str]:
-        """Extract monetary amount from a single line"""
-        for pattern in self.patterns['turnover']:
-            matches = re.findall(pattern, line, re.IGNORECASE)
-            if matches:
-                amount = matches[0].replace(',', '')
-                if amount.replace('.', '').isdigit():
-                    return amount
-        return None
-    
-    def _extract_category_description(self, context: str) -> str:
-        """Extract description of product/service category"""
-        lines = context.split('\n')
-        
-        # Look for lines that contain description-related keywords
-        for line in lines:
-            line_lower = line.lower()
-            if any(keyword in line_lower for keyword in ['description', 'category', 'business', 'activity']):
-                # Clean the line and extract meaningful content
-                cleaned = re.sub(r'^[•\-\*\d\.]+\s*', '', line.strip())
-                if len(cleaned) > 10:  # Ensure it's substantial
-                    return cleaned
-        
-        return "Information not found"
-    
-    def _extract_service_description(self, context: str) -> str:
-        """Extract description of the product/service"""
-        lines = context.split('\n')
-        
-        # Look for lines that contain service description
-        for line in lines:
-            line_lower = line.lower()
-            if any(keyword in line_lower for keyword in ['product', 'service', 'offering', 'business']):
-                if 'description' in line_lower or 'details' in line_lower:
-                    cleaned = re.sub(r'^[•\-\*\d\.]+\s*', '', line.strip())
-                    if len(cleaned) > 10:
-                        return cleaned
-        
-        return "Information not found"
-    
-    def _extract_generic(self, context: str, question: str) -> str:
-        """Generic extraction for other question types"""
-        # Extract key terms from the question
-        key_terms = re.findall(r'\b\w{4,}\b', question.lower())
-        
-        lines = context.split('\n')
-        best_match = ""
-        max_score = 0
-        
-        for line in lines:
-            line_lower = line.lower()
-            score = sum(1 for term in key_terms if term in line_lower)
-            
-            if score > max_score and len(line.strip()) > 10:
-                max_score = score
-                best_match = line.strip()
-        
-        return best_match if best_match else "Information not found"
-
-class PDFRegulatoryExtractor:
-    """Main class for extracting regulatory information from PDFs"""
-    
-    def __init__(self):
-        self.pdf_extractor = PDFExtractor()
-        self.answer_extractor = AnswerExtractor()
-        
-        # Define the specific regulatory questions
         self.questions = [
             "Corporate identity number (CIN) of company",
             "Financial year to which financial statements relates",
@@ -310,190 +24,322 @@ class PDFRegulatoryExtractor:
             "Description of the product or service",
             "Turnover of highest contributing product or service (in Rupees)"
         ]
-        
-        # Enhanced keywords for better matching
-        self.question_keywords = {
-            "Corporate identity number (CIN) of company": ["CIN", "corporate identity", "registration", "L", "U"],
-            "Financial year to which financial statements relates": ["financial year", "FY", "year ended", "period ended", "fiscal year"],
-            "Product or service category code (ITC/ NPCS 4 digit code)": ["ITC", "NPCS", "product code", "service code", "4 digit", "category code"],
-            "Description of the product or service category": ["product category", "service category", "business segment", "description", "activity"],
-            "Turnover of the product or service category (in Rupees)": ["category turnover", "segment turnover", "revenue", "sales", "turnover"],
-            "Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)": ["8 digit", "highest turnover", "main product", "primary", "contributing"],
-            "Description of the product or service": ["product description", "service description", "main offering", "primary business"],
-            "Turnover of highest contributing product or service (in Rupees)": ["highest turnover", "main product turnover", "primary revenue", "maximum", "contributing"]
-        }
-        
-        # Page preferences (first 2 questions typically on page 1, rest on page 10)
-        self.page_preferences = {
-            0: [1, 2, 3],  # CIN - usually on first few pages
-            1: [1, 2, 3],  # Financial year - usually on first few pages
-            2: [10, 9, 11, 8, 12],  # Product code - usually on page 10
-            3: [10, 9, 11, 8, 12],  # Product description - usually on page 10
-            4: [10, 9, 11, 8, 12],  # Category turnover - usually on page 10
-            5: [10, 9, 11, 8, 12],  # Highest product code - usually on page 10
-            6: [10, 9, 11, 8, 12],  # Service description - usually on page 10
-            7: [10, 9, 11, 8, 12],  # Highest turnover - usually on page 10
-        }
     
-    def process_pdf(self, pdf_path: str, debug_mode: bool = False) -> Dict[str, str]:
-        """Process a PDF file and extract regulatory information"""
-        total_start_time = time.time()
-        print(f"Processing PDF: {pdf_path}")
+    def extract_and_analyze_pdf(self, pdf_path: str):
+        """Extract and thoroughly analyze PDF content"""
+        print(f"\n{'='*100}")
+        print(f"COMPLETE PDF ANALYSIS: {os.path.basename(pdf_path)}")
+        print(f"{'='*100}")
         
         try:
-            # Extract text from PDF
-            pages = self.pdf_extractor.extract_text_from_pdf(pdf_path)
-            answers = {}
+            doc = fitz.open(pdf_path)
+            print(f"Total pages in PDF: {len(doc)}")
             
-            if debug_mode:
-                print(f"\n{'='*80}")
-                print(f"DEBUG MODE - PDF: {os.path.basename(pdf_path)}")
-                print(f"{'='*80}")
-                print(f"Total pages in PDF: {len(pages)}")
+            # Analyze specific pages (1 and 10)
+            target_pages = [1, 10]
             
-            # Process each question
-            for i, question in enumerate(self.questions):
-                question_start = time.time()
-                
-                if debug_mode:
-                    print(f"\n--- Question {i+1}: {question} ---")
-                
-                # Get keywords for this question
-                keywords = self.question_keywords.get(question, [])
-                
-                # Search for relevant pages
-                relevant_page_nums = self.pdf_extractor.search_keywords_in_pdf(pages, keywords, question)
-                
-                # If no relevant pages found, use page preferences
-                if not relevant_page_nums:
-                    preferred_pages = self.page_preferences.get(i, [1, 2, 3])
-                    relevant_page_nums = [p for p in preferred_pages if p <= len(pages)]
-                    if debug_mode:
-                        print(f"  No keyword matches found, using preferred pages: {relevant_page_nums}")
-                
-                # Extract context from relevant pages
-                context = ""
-                for page_num in relevant_page_nums[:3]:  # Limit to first 3 relevant pages
-                    page_data = next((p for p in pages if p["page_num"] == page_num), None)
-                    if page_data:
-                        context += f"\n--- Page {page_num} ---\n"
-                        context += page_data["text"]
-                
-                if debug_mode:
-                    print(f"  Context length: {len(context)} characters")
-                    print(f"  First 200 chars: {context[:200]}...")
-                
-                # Extract answer
-                answer = self.answer_extractor.extract_answer(question, context)
-                answers[question] = answer
-                
-                if debug_mode:
-                    print(f"  Answer: {answer}")
-                    print(f"  Time taken: {time.time() - question_start:.2f} seconds")
+            for page_num in target_pages:
+                if page_num <= len(doc):
+                    self._analyze_page_content(doc, page_num)
+                else:
+                    print(f"\nPage {page_num} does not exist in this PDF")
             
-            print(f"Completed processing {pdf_path} in {time.time() - total_start_time:.2f} seconds")
-            return answers
+            doc.close()
             
         except Exception as e:
-            print(f"Error processing PDF {pdf_path}: {e}")
-            return {question: f"Error: {str(e)}" for question in self.questions}
+            print(f"Error analyzing PDF: {e}")
     
-    def process_pdfs_batch(self, pdf_dir: str, output_excel: str, debug_mode: bool = False):
-        """Process multiple PDF files and save results to Excel"""
-        batch_start_time = time.time()
-        print(f"Processing all PDFs in directory: {pdf_dir}")
+    def _analyze_page_content(self, doc, page_num: int):
+        """Analyze content of a specific page"""
+        print(f"\n{'-'*80}")
+        print(f"PAGE {page_num} ANALYSIS")
+        print(f"{'-'*80}")
         
-        if not os.path.isdir(pdf_dir):
-            print(f"Directory not found: {pdf_dir}")
-            return
+        page = doc.load_page(page_num - 1)  # 0-based indexing
+        text = page.get_text()
         
-        pdf_files = [f for f in os.listdir(pdf_dir) if f.lower().endswith('.pdf')]
+        print(f"Page {page_num} character count: {len(text)}")
+        print(f"Page {page_num} line count: {len(text.split(chr(10)))}")
         
-        if not pdf_files:
-            print(f"No PDF files found in {pdf_dir}")
-            return
+        # Show raw text structure
+        print(f"\n--- RAW TEXT CONTENT (First 50 lines) ---")
+        lines = text.split('\n')
+        for i, line in enumerate(lines[:50]):
+            if line.strip():  # Only show non-empty lines
+                print(f"{i+1:3d}: {line}")
         
-        print(f"Found {len(pdf_files)} PDF files")
+        if len(lines) > 50:
+            print(f"\n... (Total {len(lines)} lines, showing only first 50)")
+            print(f"\n--- LAST 20 LINES ---")
+            for i, line in enumerate(lines[-20:], len(lines)-19):
+                if line.strip():
+                    print(f"{i:3d}: {line}")
         
-        results = []
+        # Search for potential answers
+        print(f"\n--- PATTERN DETECTION ON PAGE {page_num} ---")
         
-        for pdf_file in pdf_files:
-            pdf_path = os.path.join(pdf_dir, pdf_file)
-            try:
-                answers = self.process_pdf(pdf_path, debug_mode)
-                result = {"PDF Filename": pdf_file}
-                result.update(answers)
-                results.append(result)
+        # 1. CIN patterns
+        cin_patterns = re.findall(r'[UL]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6}', text)
+        if cin_patterns:
+            print(f"✓ CIN patterns found: {cin_patterns}")
+        else:
+            print("✗ No standard CIN patterns found")
+            # Look for lines containing "CIN" or "Corporate Identity"
+            cin_lines = [line.strip() for line in lines if 'cin' in line.lower() or 'corporate identity' in line.lower()]
+            if cin_lines:
+                print(f"  Lines mentioning CIN: {cin_lines[:3]}")
+        
+        # 2. Financial year patterns
+        fy_patterns = re.findall(r'20\d{2}[-/]\d{2,4}|FY\s*20\d{2}|financial year.*?20\d{2}', text, re.IGNORECASE)
+        if fy_patterns:
+            print(f"✓ Financial Year patterns: {fy_patterns}")
+        else:
+            print("✗ No standard FY patterns found")
+            fy_lines = [line.strip() for line in lines if any(word in line.lower() for word in ['financial year', 'year ended', 'fy '])]
+            if fy_lines:
+                print(f"  Lines mentioning Financial Year: {fy_lines[:3]}")
+        
+        # 3. Look for 4-digit and 8-digit codes
+        four_digit_codes = re.findall(r'\b\d{4}\b', text)
+        eight_digit_codes = re.findall(r'\b\d{8}\b', text)
+        
+        if four_digit_codes:
+            print(f"✓ 4-digit codes found: {four_digit_codes[:10]}...")
+        else:
+            print("✗ No 4-digit codes found")
+        
+        if eight_digit_codes:
+            print(f"✓ 8-digit codes found: {eight_digit_codes}")
+        else:
+            print("✗ No 8-digit codes found")
+        
+        # 4. Look for monetary amounts
+        money_patterns = re.findall(r'(?:Rs\.?|₹|INR)[\s]*[0-9,]+\.?\d*|[0-9,]+\.?\d*\s*(?:crore|lakh|million)', text, re.IGNORECASE)
+        if money_patterns:
+            print(f"✓ Monetary amounts found: {money_patterns[:10]}...")
+        else:
+            print("✗ No clear monetary patterns found")
+        
+        # 5. Look for product/service related content
+        product_lines = [line.strip() for line in lines if any(word in line.lower() for word in ['product', 'service', 'business', 'segment', 'category'])]
+        if product_lines:
+            print(f"✓ Product/Service lines found: {len(product_lines)} lines")
+            print(f"  Sample lines: {product_lines[:3]}")
+        else:
+            print("✗ No product/service related content found")
+        
+        # 6. Look for tables or structured data
+        table_indicators = [line.strip() for line in lines if '\t' in line or '|' in line or len(re.findall(r'\s+', line)) > 5]
+        if table_indicators:
+            print(f"✓ Potential table structures: {len(table_indicators)} lines")
+            print(f"  Sample table lines: {table_indicators[:3]}")
+        
+        # 7. Look for questions themselves in the text
+        print(f"\n--- SEARCHING FOR ACTUAL QUESTIONS IN TEXT ---")
+        for i, question in enumerate(self.questions, 1):
+            question_found = False
+            question_words = question.lower().split()
+            
+            for line in lines:
+                line_lower = line.lower()
+                # Check if significant parts of the question appear in the line
+                word_matches = sum(1 for word in question_words if len(word) > 3 and word in line_lower)
+                if word_matches >= 2:  # If at least 2 significant words match
+                    print(f"  Q{i} potential match: {line.strip()}")
+                    question_found = True
+                    break
+            
+            if not question_found:
+                print(f"  Q{i}: No clear match found")
+    
+    def find_exact_answers(self, pdf_path: str):
+        """Try to find where exactly the answers are located"""
+        print(f"\n{'='*100}")
+        print(f"ANSWER LOCATION ANALYSIS: {os.path.basename(pdf_path)}")
+        print(f"{'='*100}")
+        
+        try:
+            doc = fitz.open(pdf_path)
+            
+            # Check all pages for question content
+            for page_num in range(1, min(len(doc) + 1, 15)):  # Check first 15 pages
+                page = doc.load_page(page_num - 1)
+                text = page.get_text()
+                lines = text.split('\n')
                 
-            except Exception as e:
-                print(f"Error processing {pdf_file}: {e}")
-                result = {"PDF Filename": pdf_file}
-                result.update({question: f"Error: {str(e)}" for question in self.questions})
-                results.append(result)
-        
-        # Save results to Excel
-        if results:
-            df = pd.DataFrame(results)
-            columns = ["PDF Filename"] + self.questions
-            df = df[columns]
-            df.to_excel(output_excel, index=False)
-            print(f"Results saved to {output_excel}")
-            self._display_summary(df)
-        
-        print(f"Total batch processing completed in {time.time() - batch_start_time:.2f} seconds")
+                # Look for lines that might contain answers
+                relevant_lines = []
+                for line in lines:
+                    line_clean = line.strip()
+                    if len(line_clean) > 10:  # Ignore very short lines
+                        # Check if line contains potential answer indicators
+                        if any(indicator in line_clean.lower() for indicator in [
+                            'cin', 'corporate identity', 'l1', 'l2', 'l3', 'l4', 'l5', 'u1', 'u2', 'u3',
+                            'financial year', 'fy', 'year ended', '2023', '2024', '2022', '2021',
+                            'code', 'itc', 'npcs', 'product', 'service', 'category',
+                            'turnover', 'revenue', 'sales', 'rs.', '₹', 'crore', 'lakh',
+                            'highest', 'main', 'primary', 'description'
+                        ]):
+                            relevant_lines.append((line_clean, line_clean.lower()))
+                
+                if relevant_lines:
+                    print(f"\n--- PAGE {page_num} - RELEVANT LINES ---")
+                    for line, line_lower in relevant_lines[:20]:  # Show first 20 relevant lines
+                        print(f"  {line}")
+            
+            doc.close()
+            
+        except Exception as e:
+            print(f"Error in answer location analysis: {e}")
+
+class SimpleExtractor:
+    """Simplified extractor to manually locate answers"""
     
-    def _display_summary(self, df: pd.DataFrame):
-        """Display extraction summary"""
-        print("\n" + "="*80)
-        print("EXTRACTION SUMMARY")
-        print("="*80)
-        print(f"Total PDFs processed: {len(df)}")
+    def __init__(self):
+        self.questions = [
+            "Corporate identity number (CIN) of company",
+            "Financial year to which financial statements relates",
+            "Product or service category code (ITC/ NPCS 4 digit code)",
+            "Description of the product or service category",
+            "Turnover of the product or service category (in Rupees)",
+            "Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)",
+            "Description of the product or service",
+            "Turnover of highest contributing product or service (in Rupees)"
+        ]
+    
+    def extract_from_pdf(self, pdf_path: str) -> Dict[str, str]:
+        """Simple extraction with manual inspection"""
+        print(f"\nExtracting from: {os.path.basename(pdf_path)}")
         
-        for question in self.questions:
-            found_count = len(df[df[question] != "Information not found"])
-            success_rate = (found_count / len(df)) * 100
-            print(f"{question[:50]}... : {found_count}/{len(df)} ({success_rate:.1f}%)")
+        try:
+            doc = fitz.open(pdf_path)
+            
+            # Get text from pages 1 and 10
+            page1_text = ""
+            page10_text = ""
+            
+            if len(doc) >= 1:
+                page1_text = doc.load_page(0).get_text()
+            
+            if len(doc) >= 10:
+                page10_text = doc.load_page(9).get_text()
+            
+            doc.close()
+            
+            # Manual extraction attempts
+            results = {}
+            
+            # Process each question with the appropriate page
+            for i, question in enumerate(self.questions):
+                if i < 2:  # First 2 questions from page 1
+                    answer = self._extract_answer_simple(question, page1_text, 1)
+                else:  # Rest from page 10
+                    answer = self._extract_answer_simple(question, page10_text, 10)
+                
+                results[question] = answer
+                print(f"  Q{i+1}: {answer}")
+            
+            return results
+            
+        except Exception as e:
+            print(f"Error extracting from {pdf_path}: {e}")
+            return {q: "Error" for q in self.questions}
+    
+    def _extract_answer_simple(self, question: str, text: str, page_num: int) -> str:
+        """Simple answer extraction"""
+        if not text:
+            return f"Page {page_num} not found"
         
-        print("="*80)
+        lines = text.split('\n')
+        
+        # For each question type, look for the most obvious patterns
+        question_lower = question.lower()
+        
+        if "cin" in question_lower:
+            # Look for CIN pattern
+            for line in lines:
+                cin_match = re.search(r'[LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6}', line)
+                if cin_match:
+                    return cin_match.group(0)
+            return "CIN not found in standard format"
+        
+        elif "financial year" in question_lower:
+            # Look for year patterns
+            for line in lines:
+                if 'financial year' in line.lower() or 'fy' in line.lower() or 'year ended' in line.lower():
+                    year_match = re.search(r'20\d{2}[-/]\d{2,4}', line)
+                    if year_match:
+                        return year_match.group(0)
+            return "Financial year not found"
+        
+        elif "4 digit code" in question_lower:
+            # Look for 4 digit codes
+            four_digit_codes = re.findall(r'\b\d{4}\b', text)
+            if four_digit_codes:
+                return f"Found codes: {four_digit_codes[:5]}"  # Show first 5
+            return "No 4-digit codes found"
+        
+        elif "8 digit code" in question_lower:
+            # Look for 8 digit codes
+            eight_digit_codes = re.findall(r'\b\d{8}\b', text)
+            if eight_digit_codes:
+                return f"Found codes: {eight_digit_codes}"
+            return "No 8-digit codes found"
+        
+        elif "turnover" in question_lower:
+            # Look for monetary amounts
+            money_patterns = re.findall(r'(?:Rs\.?|₹|INR)[\s]*[0-9,]+\.?\d*|[0-9,]+\.?\d*\s*(?:crore|lakh)', text, re.IGNORECASE)
+            if money_patterns:
+                return f"Found amounts: {money_patterns[:3]}"  # Show first 3
+            return "No turnover amounts found"
+        
+        elif "description" in question_lower:
+            # Look for description lines
+            desc_lines = [line.strip() for line in lines if 'description' in line.lower() or 'product' in line.lower() or 'service' in line.lower()]
+            if desc_lines:
+                return f"Found descriptions: {desc_lines[0][:100]}..."  # Show first description
+            return "No descriptions found"
+        
+        else:
+            return "Question type not recognized"
 
 def main():
-    """Main function"""
-    import argparse
-    parser = argparse.ArgumentParser(description="PDF Regulatory Information Extraction")
-    parser.add_argument("--pdf_dir", type=str, default="pdfs", help="Directory containing PDF files")
-    parser.add_argument("--output", type=str, default="regulatory_extraction_results.xlsx", help="Output Excel file")
-    parser.add_argument("--single_pdf", type=str, default=None, help="Process a single PDF file")
-    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-    args = parser.parse_args()
+    """Main function for debugging and extraction"""
+    debugger = PDFDebugger()
+    extractor = SimpleExtractor()
     
-    try:
-        print("Starting PDF Regulatory Information Extraction")
-        pipeline = PDFRegulatoryExtractor()
+    # Get PDF file path from user
+    pdf_path = input("Enter the full path to your PDF file: ").strip().strip('"')
+    
+    if not os.path.exists(pdf_path):
+        print(f"File not found: {pdf_path}")
+        return
+    
+    print("Choose analysis type:")
+    print("1. Complete PDF structure analysis")
+    print("2. Answer location analysis")
+    print("3. Simple extraction attempt")
+    print("4. All of the above")
+    
+    choice = input("Enter choice (1-4): ").strip()
+    
+    if choice in ['1', '4']:
+        debugger.extract_and_analyze_pdf(pdf_path)
+    
+    if choice in ['2', '4']:
+        debugger.find_exact_answers(pdf_path)
+    
+    if choice in ['3', '4']:
+        print(f"\n{'='*80}")
+        print("SIMPLE EXTRACTION ATTEMPT")
+        print(f"{'='*80}")
+        results = extractor.extract_from_pdf(pdf_path)
         
-        if args.single_pdf:
-            if not os.path.isfile(args.single_pdf):
-                print(f"PDF file not found: {args.single_pdf}")
-                return
-            
-            # Process single PDF
-            results = pipeline.process_pdf(args.single_pdf, args.debug)
-            
-            # Save results
-            df_data = [{"PDF Filename": os.path.basename(args.single_pdf), **results}]
-            df = pd.DataFrame(df_data)
-            columns = ["PDF Filename"] + pipeline.questions
-            df = df[columns]
-            df.to_excel(args.output, index=False)
-            print(f"Results saved to {args.output}")
-            
-        else:
-            # Process directory
-            pipeline.process_pdfs_batch(args.pdf_dir, args.output, args.debug)
-        
-        print("Processing completed successfully!")
-        
-    except Exception as e:
-        print(f"Pipeline error: {e}")
+        # Save results to Excel for inspection
+        df = pd.DataFrame([{"PDF_File": os.path.basename(pdf_path), **results}])
+        output_file = "debug_extraction_results.xlsx"
+        df.to_excel(output_file, index=False)
+        print(f"\nResults saved to: {output_file}")
 
 if __name__ == "__main__":
     main()
