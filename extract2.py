@@ -374,7 +374,7 @@ class PDFRegulatoryExtractorFast:
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Fast Rule-Based PDF Regulatory Information Extraction")
-    parser.add_argument("--pdf_dir", type=str, required=True, help="Directory containing PDF files")
+    parser.add_argument("--pdf_dir", type=str, default="C:\\Users\\c-ManasA\\OneDrive - crisil.com\\Desktop\\New folder\\pdf's", help="Directory containing PDF files")
     parser.add_argument("--output", type=str, default="regulatory_info_fast_results.xlsx", help="Output Excel file")
     parser.add_argument("--single_pdf", type=str, default=None, help="Process a single PDF instead of a directory")
     parser.add_argument("--parallel", action="store_true", help="Use parallel processing (default: serial)")
