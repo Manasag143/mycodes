@@ -41,6 +41,7 @@ class PDFExtractor:
                     page = doc[page_num - 1]  # PyMuPDF uses 0-based indexing
                     text = page.get_text()
                     extracted_pages[page_num] = text
+                    print(f"Extracted {len(text)} characters from page {page_num}")
                 else:
                     print(f"Page {page_num} does not exist in PDF")
                     extracted_pages[page_num] = ""
@@ -53,128 +54,281 @@ class PDFExtractor:
             raise
 
 class FormFieldExtractor:
-    """Class for extracting specific form fields using pattern matching"""
+    """Class for extracting specific form fields using flexible pattern matching"""
     
     def __init__(self):
-        # Define patterns for each field
-        self.field_patterns = {
+        # More flexible patterns that look for common keywords and nearby values
+        self.field_keywords = {
             "Corporate identity number (CIN) of company": [
-                r'CIN[:\s]*([LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6})',
-                r'Corporate Identity Number[:\s]*([LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6})',
-                r'([LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6})',
+                "cin", "corporate identity", "corporate identification", 
+                "company identification", "registration number"
             ],
             "Financial year to which financial statements relates": [
-                r'Financial Year[:\s]*([0-9]{4}[-/][0-9]{2,4})',
-                r'FY[:\s]*([0-9]{4}[-/][0-9]{2,4})',
-                r'Year ended[:\s]*([0-9]{4}[-/][0-9]{2,4})',
-                r'for the year[:\s]*([0-9]{4}[-/][0-9]{2,4})',
-                r'([0-9]{4}[-/][0-9]{2,4})'
+                "financial year", "fy", "year ended", "period ended", 
+                "financial period", "accounting year", "reporting period"
             ],
             "Product or service category code (ITC/ NPCS 4 digit code)": [
-                r'ITC[:\s]*(\d{4})',
-                r'NPCS[:\s]*(\d{4})',
-                r'Product code[:\s]*(\d{4})',
-                r'Service code[:\s]*(\d{4})',
-                r'Category code[:\s]*(\d{4})'
+                "itc", "npcs", "product code", "service code", "category code",
+                "business code", "activity code", "classification code"
             ],
             "Description of the product or service category": [
-                r'Product category[:\s]*([A-Za-z\s,.-]+?)(?:\n|$)',
-                r'Service category[:\s]*([A-Za-z\s,.-]+?)(?:\n|$)',
-                r'Business segment[:\s]*([A-Za-z\s,.-]+?)(?:\n|$)',
-                r'Main business[:\s]*([A-Za-z\s,.-]+?)(?:\n|$)'
+                "product category", "service category", "business segment",
+                "main business", "principal business", "nature of business",
+                "business activity", "product description", "service description"
             ],
             "Turnover of the product or service category (in Rupees)": [
-                r'Category turnover[:\s]*(Rs\.?\s*[\d,]+)',
-                r'Segment turnover[:\s]*(Rs\.?\s*[\d,]+)',
-                r'Product turnover[:\s]*(Rs\.?\s*[\d,]+)',
-                r'Service turnover[:\s]*(Rs\.?\s*[\d,]+)',
-                r'Revenue[:\s]*(Rs\.?\s*[\d,]+)'
+                "category turnover", "segment turnover", "product turnover",
+                "service turnover", "revenue", "sales", "income"
             ],
             "Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)": [
-                r'Highest.*?code[:\s]*(\d{8})',
-                r'Main product code[:\s]*(\d{8})',
-                r'Primary service code[:\s]*(\d{8})',
-                r'ITC.*?8[:\s]*(\d{8})',
-                r'NPCS.*?8[:\s]*(\d{8})'
+                "highest turnover", "main product", "primary product",
+                "major product", "principal product", "8 digit", "eight digit"
             ],
             "Description of the product or service": [
-                r'Main product[:\s]*([A-Za-z\s,.-]+?)(?:\n|$)',
-                r'Primary service[:\s]*([A-Za-z\s,.-]+?)(?:\n|$)',
-                r'Highest contributing[:\s]*([A-Za-z\s,.-]+?)(?:\n|$)',
-                r'Product description[:\s]*([A-Za-z\s,.-]+?)(?:\n|$)'
+                "main product", "primary service", "principal business",
+                "highest contributing", "major business", "core business"
             ],
             "Turnover of highest contributing product or service (in Rupees)": [
-                r'Highest.*?turnover[:\s]*([\d,]+)',
-                r'Main.*?turnover[:\s]*([\d,]+)',
-                r'Primary.*?revenue[:\s]*([\d,]+)',
-                r'Highest.*?revenue[:\s]*([\d,]+)',
-                r'Maximum.*?turnover[:\s]*([\d,]+)',
-                # Additional patterns for common formats
-                r'Rs\.?\s*([\d,]+)\s*(?:lakhs?|crores?)?',
-                r'₹\s*([\d,]+)',
-                r'(\d{1,3}(?:,\d{3})*|\d+)(?:\s*(?:lakhs?|crores?))?'
+                "highest turnover", "main turnover", "primary turnover",
+                "principal turnover", "major turnover", "maximum turnover",
+                "highest revenue", "main revenue", "primary revenue"
             ]
         }
     
     def extract_field_value(self, text: str, field_name: str) -> str:
-        """Extract a specific field value from text using regex patterns"""
-        patterns = self.field_patterns.get(field_name, [])
+        """Extract field value using flexible keyword-based search"""
+        print(f"Searching for: {field_name}")
         
-        for pattern in patterns:
-            try:
-                match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
-                if match:
-                    value = match.group(1).strip()
-                    # Clean up the extracted value
-                    value = self._clean_extracted_value(value, field_name)
-                    if value:  # Only return non-empty values
-                        return value
-            except Exception as e:
-                print(f"Error in pattern matching for {field_name}: {e}")
-                continue
+        # Get keywords for this field
+        keywords = self.field_keywords.get(field_name, [])
         
+        # Clean and normalize text for better matching
+        normalized_text = self._normalize_text(text)
+        
+        # Try different extraction strategies
+        strategies = [
+            self._extract_by_keywords_and_patterns,
+            self._extract_by_proximity_search,
+            self._extract_by_line_analysis,
+            self._extract_by_context_matching
+        ]
+        
+        for strategy in strategies:
+            result = strategy(normalized_text, field_name, keywords)
+            if result and result != "Information not found":
+                print(f"Found using strategy {strategy.__name__}: {result}")
+                return result
+        
+        print(f"No value found for {field_name}")
         return "Information not found"
     
-    def _clean_extracted_value(self, value: str, field_name: str) -> str:
-        """Clean and format extracted values"""
-        # Remove extra whitespace
-        value = re.sub(r'\s+', ' ', value).strip()
+    def _normalize_text(self, text: str) -> str:
+        """Normalize text for better pattern matching"""
+        # Remove extra whitespace and normalize line breaks
+        text = re.sub(r'\s+', ' ', text)
+        # Keep original text structure but clean it
+        return text.strip()
+    
+    def _extract_by_keywords_and_patterns(self, text: str, field_name: str, keywords: List[str]) -> str:
+        """Extract using keyword proximity and common patterns"""
         
-        # Field-specific cleaning
-        if "CIN" in field_name:
-            # Ensure CIN format is correct
-            value = re.sub(r'[^A-Z0-9]', '', value.upper())
-            
+        if "CIN" in field_name or "corporate identity" in field_name.lower():
+            # Look for CIN patterns
+            cin_patterns = [
+                r'([LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})',
+                r'CIN[:\s]*([LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})',
+                r'([LU]-?\d{5}-?[A-Z]{2}-?\d{4}-?[A-Z]{3}-?\d{6})'
+            ]
+            for pattern in cin_patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    return re.sub(r'[^A-Z0-9]', '', match.group(1).upper())
+        
         elif "financial year" in field_name.lower():
-            # Standardize financial year format
-            value = re.sub(r'[^\d\-/]', '', value)
+            # Look for year patterns
+            year_patterns = [
+                r'(\d{4}[-/]\d{2,4})',
+                r'FY\s*(\d{4}[-/]\d{2,4})',
+                r'year\s*(\d{4}[-/]\d{2,4})',
+                r'(\d{4}\s*-\s*\d{2,4})'
+            ]
+            for pattern in year_patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    return match.group(1)
+        
+        elif "4 digit code" in field_name:
+            # Look for 4-digit codes
+            four_digit_patterns = [
+                r'(?:ITC|NPCS|code)[:\s]*(\d{4})',
+                r'(\d{4})\s*(?:ITC|NPCS)',
+                r'\b(\d{4})\b'
+            ]
+            for pattern in four_digit_patterns:
+                matches = re.findall(pattern, text, re.IGNORECASE)
+                if matches:
+                    return matches[0]
+        
+        elif "8 digit code" in field_name:
+            # Look for 8-digit codes
+            eight_digit_patterns = [
+                r'(?:ITC|NPCS|code)[:\s]*(\d{8})',
+                r'(\d{8})\s*(?:ITC|NPCS)',
+                r'\b(\d{8})\b'
+            ]
+            for pattern in eight_digit_patterns:
+                matches = re.findall(pattern, text, re.IGNORECASE)
+                if matches:
+                    return matches[0]
+        
+        elif "turnover" in field_name.lower() and "highest" in field_name.lower():
+            # Look for numerical values that could be turnover
+            turnover_patterns = [
+                r'(\d{1,3}(?:,\d{3})*)',  # Numbers with commas
+                r'(\d+)',  # Any digits
+                r'Rs\.?\s*(\d{1,3}(?:,\d{3})*)',  # With Rs.
+                r'₹\s*(\d{1,3}(?:,\d{3})*)'  # With rupee symbol
+            ]
             
-        elif "code" in field_name.lower():
-            # Extract only digits for codes
-            digits = re.findall(r'\d+', value)
-            if digits:
-                if "4 digit" in field_name:
-                    value = digits[0][:4] if len(digits[0]) >= 4 else digits[0]
-                elif "8 digit" in field_name:
-                    value = digits[0][:8] if len(digits[0]) >= 8 else digits[0]
-                else:
-                    value = digits[0]
+            for pattern in turnover_patterns:
+                matches = re.findall(pattern, text)
+                if matches:
+                    # Return the largest number found (likely the turnover)
+                    numbers = [int(match.replace(',', '')) for match in matches if match.replace(',', '').isdigit()]
+                    if numbers:
+                        largest = max(numbers)
+                        return str(largest)
         
-        elif "turnover" in field_name.lower() or "Rupees" in field_name:
-            # Clean up financial figures
-            # Remove currency symbols and extract numbers
-            value = re.sub(r'[^\d,]', '', value)
-            # Remove commas for clean number
-            if "highest contributing" in field_name.lower():
-                value = value.replace(',', '')
+        return ""
+    
+    def _extract_by_proximity_search(self, text: str, field_name: str, keywords: List[str]) -> str:
+        """Search for values near keywords"""
+        lines = text.split('\n')
         
-        elif "description" in field_name.lower():
-            # Clean up descriptions
-            value = re.sub(r'[^\w\s,.-]', '', value)
-            # Limit length for descriptions
-            value = value[:100] if len(value) > 100 else value
+        for i, line in enumerate(lines):
+            line_lower = line.lower()
+            
+            # Check if any keyword is in this line
+            for keyword in keywords:
+                if keyword in line_lower:
+                    # Look for values in this line and nearby lines
+                    search_lines = []
+                    
+                    # Current line
+                    search_lines.append(line)
+                    
+                    # Previous and next lines
+                    if i > 0:
+                        search_lines.append(lines[i-1])
+                    if i < len(lines) - 1:
+                        search_lines.append(lines[i+1])
+                    
+                    combined_context = ' '.join(search_lines)
+                    
+                    # Extract based on field type
+                    if "CIN" in field_name:
+                        cin_match = re.search(r'([LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})', combined_context, re.IGNORECASE)
+                        if cin_match:
+                            return cin_match.group(1).upper()
+                    
+                    elif "financial year" in field_name.lower():
+                        year_match = re.search(r'(\d{4}[-/]\d{2,4})', combined_context)
+                        if year_match:
+                            return year_match.group(1)
+                    
+                    elif "code" in field_name.lower():
+                        if "4 digit" in field_name:
+                            code_match = re.search(r'\b(\d{4})\b', combined_context)
+                        else:
+                            code_match = re.search(r'\b(\d{8})\b', combined_context)
+                        if code_match:
+                            return code_match.group(1)
+                    
+                    elif "turnover" in field_name.lower():
+                        # Look for numbers
+                        numbers = re.findall(r'(\d{1,3}(?:,\d{3})*|\d+)', combined_context)
+                        if numbers:
+                            # Return the largest number
+                            nums = [int(n.replace(',', '')) for n in numbers if n.replace(',', '').isdigit()]
+                            if nums:
+                                return str(max(nums))
+                    
+                    elif "description" in field_name.lower():
+                        # Extract text after the keyword
+                        after_keyword = combined_context.split(keyword, 1)
+                        if len(after_keyword) > 1:
+                            desc = after_keyword[1].strip()
+                            # Clean and limit description
+                            desc = re.sub(r'[^\w\s,.-]', '', desc)[:100]
+                            return desc.strip()
         
-        return value
+        return ""
+    
+    def _extract_by_line_analysis(self, text: str, field_name: str, keywords: List[str]) -> str:
+        """Analyze each line for potential values"""
+        lines = text.split('\n')
+        
+        if "CIN" in field_name:
+            for line in lines:
+                cin_match = re.search(r'([LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})', line, re.IGNORECASE)
+                if cin_match:
+                    return cin_match.group(1).upper()
+        
+        elif "financial year" in field_name.lower():
+            for line in lines:
+                year_match = re.search(r'(\d{4}[-/]\d{2,4})', line)
+                if year_match:
+                    return year_match.group(1)
+        
+        elif "turnover" in field_name.lower() and "highest" in field_name.lower():
+            # Look for lines with large numbers
+            max_number = 0
+            for line in lines:
+                numbers = re.findall(r'(\d{6,})', line)  # Look for numbers with at least 6 digits
+                for num in numbers:
+                    try:
+                        val = int(num.replace(',', ''))
+                        if val > max_number:
+                            max_number = val
+                    except:
+                        continue
+            
+            if max_number > 0:
+                return str(max_number)
+        
+        return ""
+    
+    def _extract_by_context_matching(self, text: str, field_name: str, keywords: List[str]) -> str:
+        """Try to extract based on document context and common form layouts"""
+        
+        # For numerical fields, try to find the largest reasonable number
+        if "turnover" in field_name.lower() and "highest" in field_name.lower():
+            # Find all large numbers in the text
+            all_numbers = re.findall(r'\b(\d{6,})\b', text)
+            if all_numbers:
+                # Convert to integers and find the largest
+                numbers = []
+                for num in all_numbers:
+                    try:
+                        numbers.append(int(num.replace(',', '')))
+                    except:
+                        continue
+                
+                if numbers:
+                    return str(max(numbers))
+        
+        # For code fields, look for any 4 or 8 digit sequences
+        elif "4 digit code" in field_name:
+            codes = re.findall(r'\b(\d{4})\b', text)
+            if codes:
+                return codes[0]  # Return first 4-digit code found
+        
+        elif "8 digit code" in field_name:
+            codes = re.findall(r'\b(\d{8})\b', text)
+            if codes:
+                return codes[0]  # Return first 8-digit code found
+        
+        return ""
 
 class PDFFormExtractor:
     """Main class for extracting form data from scanned PDFs"""
@@ -195,7 +349,7 @@ class PDFFormExtractor:
             "Turnover of highest contributing product or service (in Rupees)"
         ]
         
-        # Pages to search for each field (can be customized based on form layout)
+        # Pages to search for each field
         self.field_pages = {
             "Corporate identity number (CIN) of company": [1],
             "Financial year to which financial statements relates": [1],
@@ -216,13 +370,17 @@ class PDFFormExtractor:
             # Extract text from pages 1 and 10 only
             pages_text = self.pdf_extractor.extract_specific_pages(pdf_path, [1, 10])
             
+            # Debug: Print sample text from each page
+            for page_num, text in pages_text.items():
+                print(f"Page {page_num} sample text (first 200 chars): {text[:200]}...")
+            
             # Store results
             results = {}
             
             # Process each field
             for field in self.fields:
                 field_start_time = time.time()
-                print(f"Extracting: {field[:50]}...")
+                print(f"\nExtracting: {field}")
                 
                 # Get pages to search for this field
                 search_pages = self.field_pages.get(field, [1, 10])
@@ -230,18 +388,23 @@ class PDFFormExtractor:
                 # Combine text from relevant pages
                 combined_text = ""
                 for page_num in search_pages:
-                    if page_num in pages_text:
+                    if page_num in pages_text and pages_text[page_num]:
                         combined_text += f"\n--- Page {page_num} ---\n"
                         combined_text += pages_text[page_num]
+                
+                if not combined_text.strip():
+                    print(f"  No text found in pages {search_pages}")
+                    results[field] = "No text found in target pages"
+                    continue
                 
                 # Extract field value
                 value = self.field_extractor.extract_field_value(combined_text, field)
                 results[field] = value
                 
-                print(f"  Found: {value}")
+                print(f"  Result: {value}")
                 print(f"  Extraction took {time.time() - field_start_time:.2f} seconds")
             
-            print(f"Completed processing {pdf_path} in {time.time() - total_start_time:.2f} seconds")
+            print(f"\nCompleted processing {pdf_path} in {time.time() - total_start_time:.2f} seconds")
             return results
             
         except Exception as e:
