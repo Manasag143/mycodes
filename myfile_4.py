@@ -161,29 +161,28 @@ Context: "...The Corporate Identity Number (CIN) of the Company is L17110MH1973P
 Question: Corporate identity number (CIN) of company
 Answer: L17110MH1973PLC019786
 """
-        elif "name of the company" in question.lower():
+        elif "name of the company" in question.lower() or "company name" in question.lower():
             specific_instructions = """
-- Look for the company name which is usually mentioned in the header, title, or early sections of the document
-- Look for phrases like "Annual Report of", "Company Name:", or in the company letterhead
-- The company name may include suffixes like Ltd., Limited, Pvt. Ltd., Private Limited, etc.
+- Look for the official name of the company, usually mentioned in headers, titles, or formal statements
+- The company name may be followed by "Limited", "Ltd.", "Private Limited", "Pvt. Ltd.", or similar suffixes
+- Avoid abbreviations and provide the full official name as stated in the document
 """
             few_shot_examples = """
 Example:
-Context: "...ABC Industries Limited Annual Report 2023..."
-Question: Name of the Company
-Answer: ABC Industries Limited
+Context: "...TATA CONSULTANCY SERVICES LIMITED...Annual Report for the year ended March 31, 2023..."
+Question: Name of the company
+Answer: TATA CONSULTANCY SERVICES LIMITED
 """
         elif "financial year" in question.lower():
             specific_instructions = """
 - Look for phrases like "for the year ended", "financial year", "FY", followed by dates
-- Express the financial year in DD/MM/YYYY - DD/MM/YYYY format (e.g., "01/04/2023 - 31/03/2024")
-- If only year format is found (like 2023-24), convert it to the date format assuming April 1st to March 31st
+- Express the financial year in the format "YYYY-YY" or as stated in the document
 """
             few_shot_examples = """
 Example:
 Context: "...Annual Report for the Financial Year 2022-23..."
 Question: Financial year to which financial statements relates
-Answer: 01/04/2022 - 31/03/2023
+Answer: 2022-23
 """
         elif "4 digit code" in question:
             specific_instructions = """
@@ -239,7 +238,7 @@ You will be provided with a question and context from a PDF document. Your task 
 {specific_instructions}
 Follow these general guidelines:
 - If the answer is explicitly stated in the text, provide that exact answer
-- If the answer is not in the context, respond with "-"
+- If the answer is not in the context, respond with "Information not found in the provided context"
 - Provide only the direct answer without explanations
 
 {few_shot_examples}
@@ -251,7 +250,7 @@ Question: {question}
 Context from PDF:
 {context}
 
-Answer the question based only on the information in the context. If the information is not available, return "-".
+Answer the question based only on the information in the context.
 <|eot_id|><|start_header_id|>assistant<|end_header_id|>"""
         
         return prompt
@@ -261,14 +260,18 @@ Answer the question based only on the information in the context. If the informa
         # Remove any explanatory text or prefixes
         cleaned = re.sub(r'^(Answer:|The answer is:|Based on the context,)', '', answer).strip()
         
-        # Handle "not found" responses consistently - return "-"
-        if re.search(r'(not found|not provided|not mentioned|couldn\'t find|could not find|no information|not available|not stated)', 
+        # Handle "not found" responses consistently
+        if re.search(r'(not found|not provided|not mentioned|couldn\'t find|could not find|no information)', 
                      cleaned, re.IGNORECASE):
-            return "-"
+            return "Information not found in the provided context"
         
-        # If the cleaned answer is empty or just whitespace, return "-"
-        if not cleaned or cleaned.isspace():
-            return "-"
+        # Format company name consistently
+        if "name of the company" in question.lower() or "company name" in question.lower():
+            # Clean up common prefixes and suffixes that might be added by the model
+            cleaned = re.sub(r'^(The company name is|Company name:|Name:)', '', cleaned, flags=re.IGNORECASE).strip()
+            # Remove quotes if present
+            cleaned = cleaned.strip('"\'')
+            return cleaned
         
         # Format CIN consistently
         if "CIN" in question or "corporate identity number" in question.lower():
@@ -277,34 +280,17 @@ Answer the question based only on the information in the context. If the informa
             if cin_match:
                 return cin_match.group(0)
         
-        # Format company name consistently
-        if "name of the company" in question.lower():
-            # Clean up company name - remove extra whitespace and common prefixes
-            company_name = re.sub(r'^(Company Name|Name|Company)[:.\s]*', '', cleaned, flags=re.IGNORECASE).strip()
-            if company_name:
-                return company_name
-            return "-"
-        
         # Format financial year consistently
         if "financial year" in question.lower():
             # Look for common financial year patterns
             fy_match = re.search(r'(FY|F\.Y\.|Financial Year)[ :]?([0-9]{4}[-/ ][0-9]{2,4})', cleaned, re.IGNORECASE)
             if fy_match:
-                year_part = fy_match.group(2)
-                return self._convert_to_date_format(year_part)
+                return fy_match.group(2)
             
             # Try another pattern
             fy_match2 = re.search(r'([0-9]{4}[-/ ][0-9]{2,4})', cleaned)
             if fy_match2:
-                year_part = fy_match2.group(1)
-                return self._convert_to_date_format(year_part)
-            
-            # Try to find year ended pattern
-            year_ended_match = re.search(r'year ended[:\s]+([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{4})', cleaned, re.IGNORECASE)
-            if year_ended_match:
-                end_date = year_ended_match.group(1)
-                # Convert to DD/MM/YYYY format and calculate start date
-                return self._format_year_ended_to_date_range(end_date)
+                return fy_match2.group(1)
         
         # Format product codes consistently
         if "code" in question.lower():
@@ -344,74 +330,8 @@ Answer the question based only on the information in the context. If the informa
             if amount_match:
                 return f"Rs. {amount_match.group(1)} {amount_match.group(2)}"
         
-        # Return the cleaned answer for other questions, or "-" if empty
-        return cleaned if cleaned else "-"
-    
-    def _convert_to_date_format(self, year_string: str) -> str:
-        """Convert year format like '2023-24' to date format '01/04/2023 - 31/03/2024'"""
-        try:
-            # Handle different separators
-            year_string = year_string.replace('/', '-').replace(' ', '-')
-            
-            if '-' in year_string:
-                parts = year_string.split('-')
-                start_year = int(parts[0])
-                
-                # Handle 2-digit or 4-digit end year
-                if len(parts[1]) == 2:
-                    end_year = int(f"{start_year // 100}{parts[1]:0>2}")
-                else:
-                    end_year = int(parts[1])
-                
-                # Financial year typically runs April 1 to March 31
-                start_date = f"01/04/{start_year}"
-                end_date = f"31/03/{end_year}"
-                
-                return f"{start_date} - {end_date}"
-            else:
-                # Single year - assume current financial year
-                year = int(year_string)
-                start_date = f"01/04/{year}"
-                end_date = f"31/03/{year + 1}"
-                return f"{start_date} - {end_date}"
-                
-        except (ValueError, IndexError):
-            return year_string  # Return original if conversion fails
-    
-    def _format_year_ended_to_date_range(self, end_date_str: str) -> str:
-        """Convert 'year ended 31/03/2024' to '01/04/2023 - 31/03/2024' format"""
-        try:
-            # Parse the end date
-            import datetime
-            
-            # Handle different date formats
-            for fmt in ['%d/%m/%Y', '%m/%d/%Y', '%d-%m-%Y', '%m-%d-%Y']:
-                try:
-                    end_date = datetime.datetime.strptime(end_date_str.replace('-', '/'), fmt)
-                    break
-                except ValueError:
-                    continue
-            else:
-                return end_date_str  # Return original if parsing fails
-            
-            # Calculate start date (typically one year before)
-            start_date = end_date.replace(year=end_date.year - 1)
-            
-            # If end date is March 31, start date should be April 1
-            if end_date.month == 3 and end_date.day == 31:
-                start_date = start_date.replace(month=4, day=1)
-            else:
-                # Add one day to end date to get start date
-                start_date = end_date.replace(year=end_date.year - 1) + datetime.timedelta(days=1)
-            
-            # Format both dates
-            start_formatted = start_date.strftime('%d/%m/%Y')
-            end_formatted = end_date.strftime('%d/%m/%Y')
-            
-            return f"{start_formatted} - {end_formatted}"
-            
-        except (ValueError, AttributeError):
-            return end_date_str  # Return original if conversion fails
+        # Return the cleaned answer for other questions
+        return cleaned
 
 class PDFRegulatoryExtractor:
     """Main class for extracting regulatory information from PDFs"""
@@ -421,11 +341,11 @@ class PDFRegulatoryExtractor:
         self.pdf_extractor = PDFExtractor()
         self.qa_processor = QuestionAnswerProcessor(self.llm_generator)
         
-        # Define the specific regulatory questions to extract (with Company Name as 3rd)
+        # Define the specific regulatory questions to extract - with company name as 3rd
         self.questions = [
             "Corporate identity number (CIN) of company",
             "Financial year to which financial statements relates",
-            "Name of the Company",
+            "Name of the company",  # Added as 3rd column
             "Product or service category code (ITC/ NPCS 4 digit code)",
             "Description of the product or service category",
             "Turnover of the product or service category (in Rupees)",
@@ -438,7 +358,7 @@ class PDFRegulatoryExtractor:
         self.question_keywords = {
             "Corporate identity number (CIN) of company": ["CIN", "corporate identity", "L", "U", "registration"],
             "Financial year to which financial statements relates": ["financial year", "FY", "year ended", "period ended"],
-            "Name of the Company": ["company name", "annual report", "limited", "ltd", "private limited", "pvt ltd"],
+            "Name of the company": ["company", "limited", "ltd", "private limited", "pvt ltd", "corporation", "enterprises", "annual report"],  # Added keywords for company name
             "Product or service category code (ITC/ NPCS 4 digit code)": ["ITC", "NPCS", "product code", "4 digit"],
             "Description of the product or service category": ["product category", "service category", "business segment"],
             "Turnover of the product or service category (in Rupees)": ["category turnover", "segment turnover", "revenue"],
@@ -474,30 +394,16 @@ class PDFRegulatoryExtractor:
                 relevant_page_nums = self.pdf_extractor.search_keywords_in_pdf(pages, keywords, question)
                 print(f"  Page search took {time.time() - search_start:.2f} seconds")
                 
-                # Always use only pages 1 and 10 for all questions
+                # If no relevant pages found, use fallback strategy - first few pages only
                 if not relevant_page_nums:
-                    print(f"  No relevant pages found, using fallback strategy (pages 1 and 10)")
-                    # Use only pages 1 and 10 for all questions
-                    relevant_page_nums = []
-                    if len(pages) >= 1:
-                        relevant_page_nums.append(1)
-                    if len(pages) >= 10:
-                        relevant_page_nums.append(10)
-                else:
-                    # Even if relevant pages found, limit to only pages 1 and 10
-                    print(f"  Limiting to pages 1 and 10 only")
-                    limited_pages = []
-                    if 1 in relevant_page_nums and len(pages) >= 1:
-                        limited_pages.append(1)
-                    if 10 in relevant_page_nums and len(pages) >= 10:
-                        limited_pages.append(10)
-                    # If neither page 1 nor 10 were in relevant pages, still use them as fallback
-                    if not limited_pages:
-                        if len(pages) >= 1:
-                            limited_pages.append(1)
-                        if len(pages) >= 10:
-                            limited_pages.append(10)
-                    relevant_page_nums = limited_pages
+                    print(f"  No relevant pages found, using fallback strategy")
+                    # Just use first few pages as fallback - this is much faster
+                    if "CIN" in question or "financial year" in question.lower() or "name of the company" in question.lower():
+                        # First 5 pages for CIN, financial year, and company name
+                        relevant_page_nums = list(range(1, min(6, len(pages) + 1)))
+                    else:
+                        # First 3 pages for other questions
+                        relevant_page_nums = list(range(1, min(4, len(pages) + 1)))
                 
                 # Sort page numbers for readability
                 relevant_page_nums = sorted(list(set(relevant_page_nums)))
@@ -523,8 +429,8 @@ class PDFRegulatoryExtractor:
                 answer = self.qa_processor.generate_answer(question, context)
                 print(f"  LLM processing took {time.time() - llm_start:.2f} seconds")
                 
-                # Store answer (ensure it's not empty, return "-" if so)
-                answers[question] = answer if answer and answer.strip() else "-"
+                # Store answer
+                answers[question] = answer
                 
                 # Log total time for this question
                 print(f"Question processed in {time.time() - question_start:.2f} seconds")
@@ -534,8 +440,8 @@ class PDFRegulatoryExtractor:
             
         except Exception as e:
             print(f"Error processing PDF {pdf_path}: {e}")
-            # Return "-" for all questions when there's an error
-            return {question: "-" for question in self.questions}
+            # Return error message for all questions
+            return {question: f"Error: {str(e)}" for question in self.questions}
     
     def process_pdfs_batch(self, pdf_dir: str, output_excel: str):
         """Process multiple PDF files and save results to an Excel file"""
@@ -577,9 +483,9 @@ class PDFRegulatoryExtractor:
                 
             except Exception as e:
                 print(f"Error processing {pdf_file}: {e}")
-                # Add error entry with "-" for all questions
+                # Add error entry
                 result = {"PDF Filename": pdf_file}
-                result.update({question: "-" for question in self.questions})
+                result.update({question: f"Error: {str(e)}" for question in self.questions})
                 results.append(result)
         
         # Create a DataFrame and save to Excel
@@ -587,7 +493,7 @@ class PDFRegulatoryExtractor:
             # Create DataFrame
             df = pd.DataFrame(results)
             
-            # Reorder columns to have PDF Filename first, then questions
+            # Reorder columns to have PDF Filename first, then questions in order
             columns = ["PDF Filename"] + self.questions
             df = df[columns]
             
