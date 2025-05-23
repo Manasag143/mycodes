@@ -141,105 +141,79 @@ class QuestionAnswerProcessor:
         return processed_answer
     
     def _create_qa_prompt(self, question: str, context: str) -> str:
-        """Create a prompt for the Llama model with few-shot examples"""
-        # Format the prompt for Llama
+        """Create a prompt for the Llama model with comprehensive few-shot examples"""
+        # Format the prompt for Llama with exactly 9 few-shot examples
         sys_message = "You are an expert in extracting business regulatory information from financial documents with high precision and accuracy."
         
-        # Create specific instructions based on question type
-        specific_instructions = ""
-        few_shot_examples = ""
-        
-        # Add question-specific instructions and examples
-        if "CIN" in question or "corporate identity" in question.lower():
-            specific_instructions = """
-- For Corporate Identity Number (CIN), look for a code that typically starts with 'L' or 'U' followed by numbers and letters
-- A CIN is a 21-digit alphanumeric code (e.g., L12345MH2010PLC123456)
-"""
-            few_shot_examples = """
-Example:
-Context: "...The Corporate Identity Number (CIN) of the Company is L17110MH1973PLC019786..."
+        # Comprehensive few-shot examples for all 9 questions
+        few_shot_examples = """
+Examples:
+
+Example 1:
+Context: "The Corporate Identity Number (CIN) of the Company is L17110MH1973PLC019786. This annual report covers the financial year 2022-23."
 Question: Corporate identity number (CIN) of company
 Answer: L17110MH1973PLC019786
-"""
-        elif "name of the company" in question.lower() or "company name" in question.lower():
-            specific_instructions = """
-- Look for the official name of the company, usually mentioned in headers, titles, or formal statements
-- The company name may be followed by "Limited", "Ltd.", "Private Limited", "Pvt. Ltd.", or similar suffixes
-- Avoid abbreviations and provide the full official name as stated in the document
-"""
-            few_shot_examples = """
-Example:
-Context: "...TATA CONSULTANCY SERVICES LIMITED...Annual Report for the year ended March 31, 2023..."
-Question: Name of the company
-Answer: TATA CONSULTANCY SERVICES LIMITED
-"""
-        elif "financial year" in question.lower():
-            specific_instructions = """
-- Look for phrases like "for the year ended", "financial year", "FY", followed by dates
-- Express the financial year in the format "YYYY-YY" or as stated in the document
-"""
-            few_shot_examples = """
-Example:
-Context: "...Annual Report for the Financial Year 2022-23..."
+
+Example 2:
+Context: "Annual Report for the Financial Year 2022-23. The board of directors present the annual report for the year ended March 31, 2023."
 Question: Financial year to which financial statements relates
 Answer: 2022-23
-"""
-        elif "4 digit code" in question:
-            specific_instructions = """
-- Look for 4-digit codes associated with product or service categories
-- The code might be labeled as ITC code, NPCS code, HS code, or NIC code
-"""
-            few_shot_examples = """
-Example:
-Context: "...The company primarily operates in the business of textile products with ITC code 5205..."
+
+Example 3:
+Context: "TATA CONSULTANCY SERVICES LIMITED Annual Report 2022-23. TCS is India's leading software services company."
+Question: Name of the company
+Answer: TATA CONSULTANCY SERVICES LIMITED
+
+Example 4:
+Context: "The company operates in information technology services with ITC code 6202. This represents computer programming activities."
 Question: Product or service category code (ITC/ NPCS 4 digit code)
-Answer: 5205
-"""
-        elif "8 digit code" in question:
-            specific_instructions = """
-- Look for 8-digit codes associated with specific products or services
-- The code might be labeled as ITC code, NPCS code, HS code, or product code
-"""
-        elif "turnover" in question.lower() and "category" in question.lower():
-            specific_instructions = """
-- Look for financial figures associated with revenue, turnover, or sales of the product/service category
-- Extract the exact amount including the unit (e.g., "Rs. 10,000,000" or "₹ 10 crores")
-"""     
-            few_shot_examples = """
-Example:
-Context: "Turnover of highest contributing product or service (in Rupees)"
+Answer: 6202
+
+Example 5:
+Context: "Primary business segment: Information Technology Services and Digital Solutions. The company provides end-to-end IT services."
+Question: Description of the product or service category
+Answer: Information Technology Services and Digital Solutions
+
+Example 6:
+Context: "Revenue from IT Services segment: Rs. 1,85,000 crores. This represents the turnover from our primary service category."
+Question: Turnover of the product or service category (in Rupees)
+Answer: 185000000000
+
+Example 7:
+Context: "Highest contributing service with detailed code 62020001 representing custom software development services."
+Question: Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)
+Answer: 62020001
+
+Example 8:
+Context: "Primary service offering: Custom Software Development and Maintenance Services for enterprise clients globally."
+Question: Description of the product or service
+Answer: Custom Software Development and Maintenance Services
+
+Example 9:
+Context: "Revenue from highest contributing service: Rs. 95,500 crores from software development and maintenance services."
 Question: Turnover of highest contributing product or service (in Rupees)
-Answer: 309223000
-"""
-        elif "turnover" in question.lower() and "highest" in question.lower():
-            specific_instructions = """
-- Look for financial figures associated with the highest revenue, turnover, or sales product/service
-- Extract the exact numerical amount in Rupees (e.g., "309223000")
-- Look for tables, financial statements, or segment reporting sections
-- The amount may be presented as plain numbers, with commas, or with currency symbols
-"""
-            few_shot_examples = """
-Example:
-Context: "...Turnover of highest contributing product or service: Rs. 30,92,23,000..."
-Question: Turnover of highest contributing product or service (in Rupees)
-Answer: 309223000
-"""
-        elif "description" in question.lower():
-            specific_instructions = """
-- Extract the exact description as stated in the document
-- Look in business segment reporting, notes to accounts, or product sections
+Answer: 95500000000
 """
         
-        # Create simplified prompt for better performance
+        instructions = """
+Extract the precise answer to the question from the context provided.
+
+Guidelines:
+- If the answer is explicitly stated in the text, provide that exact answer
+- For CIN: Extract the complete 21-character alphanumeric code starting with 'L' or 'U'
+- For company name: Provide the full official name including suffixes like 'Limited', 'Ltd.', etc.
+- For financial year: Use format like '2022-23' or as stated in document
+- For codes: Extract only the numeric digits (4-digit or 8-digit as specified)
+- For turnover amounts: Convert to pure numbers (remove currency symbols, commas, words like 'crores')
+- For descriptions: Provide the exact text as mentioned in the document
+- If no relevant information is found, respond with "-"
+- Provide only the direct answer without explanations or prefixes
+"""
+        
+        # Create the complete prompt
         prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>{sys_message}
 
-You will be provided with a question and context from a PDF document. Your task is to extract the precise answer to the question from the context.
-
-{specific_instructions}
-Follow these general guidelines:
-- If the answer is explicitly stated in the text, provide that exact answer
-- If the answer is not in the context, respond with "Information not found in the provided context"
-- Provide only the direct answer without explanations
+{instructions}
 
 {few_shot_examples}
 
@@ -247,10 +221,10 @@ Follow these general guidelines:
 
 Question: {question}
 
-Context from PDF:
+Context from PDF (Pages 1 and 10):
 {context}
 
-Answer the question based only on the information in the context.
+Extract the answer based only on the information provided in the context.
 <|eot_id|><|start_header_id|>assistant<|end_header_id|>"""
         
         return prompt
@@ -260,10 +234,10 @@ Answer the question based only on the information in the context.
         # Remove any explanatory text or prefixes
         cleaned = re.sub(r'^(Answer:|The answer is:|Based on the context,)', '', answer).strip()
         
-        # Handle "not found" responses consistently
-        if re.search(r'(not found|not provided|not mentioned|couldn\'t find|could not find|no information)', 
-                     cleaned, re.IGNORECASE):
-            return "Information not found in the provided context"
+        # Handle "not found" responses consistently - return "-"
+        if re.search(r'(not found|not provided|not mentioned|couldn\'t find|could not find|no information|not available|not specified|not given)', 
+                     cleaned, re.IGNORECASE) or not cleaned:
+            return "-"
         
         # Format company name consistently
         if "name of the company" in question.lower() or "company name" in question.lower():
@@ -330,8 +304,8 @@ Answer the question based only on the information in the context.
             if amount_match:
                 return f"Rs. {amount_match.group(1)} {amount_match.group(2)}"
         
-        # Return the cleaned answer for other questions
-        return cleaned
+        # Return the cleaned answer for other questions, or "-" if empty
+        return cleaned if cleaned else "-"
 
 class PDFRegulatoryExtractor:
     """Main class for extracting regulatory information from PDFs"""
@@ -394,16 +368,18 @@ class PDFRegulatoryExtractor:
                 relevant_page_nums = self.pdf_extractor.search_keywords_in_pdf(pages, keywords, question)
                 print(f"  Page search took {time.time() - search_start:.2f} seconds")
                 
-                # If no relevant pages found, use fallback strategy - first few pages only
+                # If no relevant pages found, use pages 1 and 10 only
                 if not relevant_page_nums:
-                    print(f"  No relevant pages found, using fallback strategy")
-                    # Just use first few pages as fallback - this is much faster
-                    if "CIN" in question or "financial year" in question.lower() or "name of the company" in question.lower():
-                        # First 5 pages for CIN, financial year, and company name
-                        relevant_page_nums = list(range(1, min(6, len(pages) + 1)))
-                    else:
-                        # First 3 pages for other questions
-                        relevant_page_nums = list(range(1, min(4, len(pages) + 1)))
+                    print(f"  No relevant pages found, using pages 1 and 10")
+                    # Use only page 1 and page 10 for context
+                    relevant_page_nums = [1]
+                    if len(pages) >= 10:
+                        relevant_page_nums.append(10)
+                else:
+                    # Even if relevant pages found, prioritize pages 1 and 10
+                    relevant_page_nums = [1]
+                    if len(pages) >= 10:
+                        relevant_page_nums.append(10)
                 
                 # Sort page numbers for readability
                 relevant_page_nums = sorted(list(set(relevant_page_nums)))
