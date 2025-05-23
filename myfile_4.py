@@ -176,13 +176,14 @@ Answer: ABC Industries Limited
         elif "financial year" in question.lower():
             specific_instructions = """
 - Look for phrases like "for the year ended", "financial year", "FY", followed by dates
-- Express the financial year in the format "YYYY-YY" or as stated in the document
+- Express the financial year in DD/MM/YYYY - DD/MM/YYYY format (e.g., "01/04/2023 - 31/03/2024")
+- If only year format is found (like 2023-24), convert it to the date format assuming April 1st to March 31st
 """
             few_shot_examples = """
 Example:
 Context: "...Annual Report for the Financial Year 2022-23..."
 Question: Financial year to which financial statements relates
-Answer: 2022-23
+Answer: 01/04/2022 - 31/03/2023
 """
         elif "4 digit code" in question:
             specific_instructions = """
@@ -289,12 +290,21 @@ Answer the question based only on the information in the context. If the informa
             # Look for common financial year patterns
             fy_match = re.search(r'(FY|F\.Y\.|Financial Year)[ :]?([0-9]{4}[-/ ][0-9]{2,4})', cleaned, re.IGNORECASE)
             if fy_match:
-                return fy_match.group(2)
+                year_part = fy_match.group(2)
+                return self._convert_to_date_format(year_part)
             
             # Try another pattern
             fy_match2 = re.search(r'([0-9]{4}[-/ ][0-9]{2,4})', cleaned)
             if fy_match2:
-                return fy_match2.group(1)
+                year_part = fy_match2.group(1)
+                return self._convert_to_date_format(year_part)
+            
+            # Try to find year ended pattern
+            year_ended_match = re.search(r'year ended[:\s]+([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{4})', cleaned, re.IGNORECASE)
+            if year_ended_match:
+                end_date = year_ended_match.group(1)
+                # Convert to DD/MM/YYYY format and calculate start date
+                return self._format_year_ended_to_date_range(end_date)
         
         # Format product codes consistently
         if "code" in question.lower():
@@ -336,6 +346,72 @@ Answer the question based only on the information in the context. If the informa
         
         # Return the cleaned answer for other questions, or "-" if empty
         return cleaned if cleaned else "-"
+    
+    def _convert_to_date_format(self, year_string: str) -> str:
+        """Convert year format like '2023-24' to date format '01/04/2023 - 31/03/2024'"""
+        try:
+            # Handle different separators
+            year_string = year_string.replace('/', '-').replace(' ', '-')
+            
+            if '-' in year_string:
+                parts = year_string.split('-')
+                start_year = int(parts[0])
+                
+                # Handle 2-digit or 4-digit end year
+                if len(parts[1]) == 2:
+                    end_year = int(f"{start_year // 100}{parts[1]:0>2}")
+                else:
+                    end_year = int(parts[1])
+                
+                # Financial year typically runs April 1 to March 31
+                start_date = f"01/04/{start_year}"
+                end_date = f"31/03/{end_year}"
+                
+                return f"{start_date} - {end_date}"
+            else:
+                # Single year - assume current financial year
+                year = int(year_string)
+                start_date = f"01/04/{year}"
+                end_date = f"31/03/{year + 1}"
+                return f"{start_date} - {end_date}"
+                
+        except (ValueError, IndexError):
+            return year_string  # Return original if conversion fails
+    
+    def _format_year_ended_to_date_range(self, end_date_str: str) -> str:
+        """Convert 'year ended 31/03/2024' to '01/04/2023 - 31/03/2024' format"""
+        try:
+            # Parse the end date
+            import datetime
+            
+            # Handle different date formats
+            for fmt in ['%d/%m/%Y', '%m/%d/%Y', '%d-%m-%Y', '%m-%d-%Y']:
+                try:
+                    end_date = datetime.datetime.strptime(end_date_str.replace('-', '/'), fmt)
+                    break
+                except ValueError:
+                    continue
+            else:
+                return end_date_str  # Return original if parsing fails
+            
+            # Calculate start date (typically one year before)
+            start_date = end_date.replace(year=end_date.year - 1)
+            
+            # If end date is March 31, start date should be April 1
+            if end_date.month == 3 and end_date.day == 31:
+                start_date = start_date.replace(month=4, day=1)
+            else:
+                # Add one day to end date to get start date
+                start_date = end_date.replace(year=end_date.year - 1) + datetime.timedelta(days=1)
+            
+            # Format both dates
+            start_formatted = start_date.strftime('%d/%m/%Y')
+            end_formatted = end_date.strftime('%d/%m/%Y')
+            
+            return f"{start_formatted} - {end_formatted}"
+            
+        except (ValueError, AttributeError):
+            return end_date_str  # Return original if conversion fails
 
 class PDFRegulatoryExtractor:
     """Main class for extracting regulatory information from PDFs"""
@@ -398,16 +474,30 @@ class PDFRegulatoryExtractor:
                 relevant_page_nums = self.pdf_extractor.search_keywords_in_pdf(pages, keywords, question)
                 print(f"  Page search took {time.time() - search_start:.2f} seconds")
                 
-                # If no relevant pages found, use fallback strategy - first few pages only
+                # Always use only pages 1 and 10 for all questions
                 if not relevant_page_nums:
-                    print(f"  No relevant pages found, using fallback strategy")
-                    # Just use first few pages as fallback - this is much faster
-                    if "CIN" in question or "financial year" in question.lower() or "name of the company" in question.lower():
-                        # First 5 pages for CIN, financial year, and company name
-                        relevant_page_nums = list(range(1, min(6, len(pages) + 1)))
-                    else:
-                        # First 3 pages for other questions
-                        relevant_page_nums = list(range(1, min(4, len(pages) + 1)))
+                    print(f"  No relevant pages found, using fallback strategy (pages 1 and 10)")
+                    # Use only pages 1 and 10 for all questions
+                    relevant_page_nums = []
+                    if len(pages) >= 1:
+                        relevant_page_nums.append(1)
+                    if len(pages) >= 10:
+                        relevant_page_nums.append(10)
+                else:
+                    # Even if relevant pages found, limit to only pages 1 and 10
+                    print(f"  Limiting to pages 1 and 10 only")
+                    limited_pages = []
+                    if 1 in relevant_page_nums and len(pages) >= 1:
+                        limited_pages.append(1)
+                    if 10 in relevant_page_nums and len(pages) >= 10:
+                        limited_pages.append(10)
+                    # If neither page 1 nor 10 were in relevant pages, still use them as fallback
+                    if not limited_pages:
+                        if len(pages) >= 1:
+                            limited_pages.append(1)
+                        if len(pages) >= 10:
+                            limited_pages.append(10)
+                    relevant_page_nums = limited_pages
                 
                 # Sort page numbers for readability
                 relevant_page_nums = sorted(list(set(relevant_page_nums)))
