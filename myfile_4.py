@@ -24,14 +24,14 @@ class StreamlinedKPIExtractor:
         # Define the 9 KPIs
         self.kpis = [
             "Corporate identity number (CIN) of company",
-            "Financial year to which financial statements relates", 
+            "Financial year to which financial statements relates",
+            "Name of the Company",
             "Product or service category code (ITC/ NPCS 4 digit code)",
             "Description of the product or service category",
             "Turnover of the product or service category (in Rupees)",
             "Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)",
             "Description of the product or service",
-            "Turnover of highest contributing product or service (in Rupees)",
-            "Main business activity description"
+            "Turnover of highest contributing product or service (in Rupees)"
         ]
         
         # Generation parameters
@@ -90,6 +90,7 @@ CRITICAL INSTRUCTIONS:
 - For financial figures, extract only the number without currency symbols
 - For CIN, extract the complete alphanumeric code
 - For financial year, use format like "2023-24" or "2023"
+- NOTE: Product category description (field 5) and product/service description (field 8) are often the same - this is expected
 
 <|eot_id|><|start_header_id|>user<|end_header_id|>
 
@@ -97,25 +98,25 @@ Extract the following 9 KPI values from the provided PDF context and return them
 
 1. Corporate identity number (CIN) of company
 2. Financial year to which financial statements relates
-3. Product or service category code (ITC/ NPCS 4 digit code) 
-4. Description of the product or service category
-5. Turnover of the product or service category (in Rupees)
-6. Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)
-7. Description of the product or service
-8. Turnover of highest contributing product or service (in Rupees)
-9. Main business activity description
+3. Name of the Company
+4. Product or service category code (ITC/ NPCS 4 digit code) 
+5. Description of the product or service category
+6. Turnover of the product or service category (in Rupees)
+7. Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)
+8. Description of the product or service
+9. Turnover of highest contributing product or service (in Rupees)
 
 Return the response in this exact JSON format:
 {{
     "cin": "value_or_-",
-    "financial_year": "value_or_-", 
+    "financial_year": "value_or_-",
+    "company_name": "value_or_-",
     "product_category_code": "value_or_-",
     "product_category_description": "value_or_-",
     "product_category_turnover": "value_or_-",
     "highest_product_code": "value_or_-",
     "highest_product_description": "value_or_-", 
-    "highest_product_turnover": "value_or_-",
-    "main_business_activity": "value_or_-"
+    "highest_product_turnover": "value_or_-"
 }}
 
 PDF CONTEXT:
@@ -172,10 +173,10 @@ PDF CONTEXT:
                 
                 # Ensure all expected keys are present
                 expected_keys = [
-                    "cin", "financial_year", "product_category_code",
+                    "cin", "financial_year", "company_name", "product_category_code",
                     "product_category_description", "product_category_turnover",
                     "highest_product_code", "highest_product_description", 
-                    "highest_product_turnover", "main_business_activity"
+                    "highest_product_turnover"
                 ]
                 
                 for key in expected_keys:
@@ -195,14 +196,14 @@ PDF CONTEXT:
         """Return empty result with all fields set to '-'"""
         return {
             "cin": "-",
-            "financial_year": "-", 
+            "financial_year": "-",
+            "company_name": "-",
             "product_category_code": "-",
             "product_category_description": "-",
             "product_category_turnover": "-",
             "highest_product_code": "-",
             "highest_product_description": "-", 
-            "highest_product_turnover": "-",
-            "main_business_activity": "-"
+            "highest_product_turnover": "-"
         }
     
     def process_single_pdf(self, pdf_path: str) -> Dict[str, str]:
@@ -265,13 +266,13 @@ PDF CONTEXT:
                     "PDF_Name": pdf_file,
                     "Corporate_Identity_Number_CIN": kpi_results["cin"],
                     "Financial_Year": kpi_results["financial_year"],
+                    "Company_Name": kpi_results["company_name"],
                     "Product_Category_Code_4digit": kpi_results["product_category_code"],
                     "Product_Category_Description": kpi_results["product_category_description"],
                     "Product_Category_Turnover": kpi_results["product_category_turnover"],
                     "Highest_Product_Code_8digit": kpi_results["highest_product_code"],
                     "Highest_Product_Description": kpi_results["highest_product_description"],
-                    "Highest_Product_Turnover": kpi_results["highest_product_turnover"],
-                    "Main_Business_Activity": kpi_results["main_business_activity"]
+                    "Highest_Product_Turnover": kpi_results["highest_product_turnover"]
                 }
                 
                 results.append(row)
@@ -284,13 +285,13 @@ PDF CONTEXT:
                     "PDF_Name": pdf_file,
                     "Corporate_Identity_Number_CIN": "ERROR",
                     "Financial_Year": "ERROR",
+                    "Company_Name": "ERROR",
                     "Product_Category_Code_4digit": "ERROR",
                     "Product_Category_Description": "ERROR",
                     "Product_Category_Turnover": "ERROR",
                     "Highest_Product_Code_8digit": "ERROR",
                     "Highest_Product_Description": "ERROR",
-                    "Highest_Product_Turnover": "ERROR",
-                    "Main_Business_Activity": "ERROR"
+                    "Highest_Product_Turnover": "ERROR"
                 }
                 results.append(error_row)
         
