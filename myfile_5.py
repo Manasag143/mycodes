@@ -159,12 +159,17 @@ Extract the following 9 KPI values from the provided PDF context and return them
 1. Corporate identity number (CIN) of company
 2. Financial year to which financial statements relates
 3. Name of the Company
-4. Product or service category code (ITC/ NPCS 4 digit code) 
-5. Description of the product or service category
-6. Turnover of the product or service category (in Rupees) - Look for segment-wise revenue/turnover figures
-7. Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)
-8. Description of the product or service
-9. Turnover of highest contributing product or service (in Rupees) - Look for highest revenue segment or main business turnover
+4. Product or service category code (ITC/ NPCS 4 digit code) - Extract each product category separately
+5. Description of the product or service category - Extract each product category separately  
+6. Turnover of the product or service category (in Rupees) - Extract turnover for each category separately
+7. Highest turnover contributing product or service code (ITC/ NPCS 8 digit code) - Extract each main product separately
+8. Description of the product or service - Extract each main product separately
+9. Turnover of highest contributing product or service (in Rupees) - Extract turnover for each main product separately
+
+IMPORTANT: If company has multiple product categories or business segments, create separate JSON for each:
+- Same CIN, Financial Year, Company Name
+- Different Product Category Code, Description, Turnover for each segment
+- Different Highest Product Code, Description, Turnover for each segment
 
 IMPORTANT FOR TURNOVER EXTRACTION:
 - Search for financial data in segment reporting, revenue breakdowns, notes to accounts
@@ -175,8 +180,10 @@ IMPORTANT FOR TURNOVER EXTRACTION:
 
 MULTIPLE ENTITIES HANDLING:
 - If PDF contains data for multiple companies/entities, provide separate JSON for each
+- If same company has multiple product/service categories, provide separate JSON for each product
 - Separate multiple JSONs using semicolon (;) between them
-- Example: {{"cin":"L123..."}} ; {{"cin":"L456..."}}
+- Example for multiple companies: {{"cin":"L123...","company_name":"ABC Ltd"}} ; {{"cin":"L456...","company_name":"XYZ Corp"}}
+- Example for multiple products: {{"cin":"L123...","product_category_code":"1234","product_category_description":"Textiles"}} ; {{"cin":"L123...","product_category_code":"5678","product_category_description":"Chemicals"}}
 
 Return the response in this exact JSON format:
 {{
@@ -388,7 +395,12 @@ PDF CONTEXT:
                     # Handle multiple entities from same PDF
                     for idx, kpi_results in enumerate(kpi_results_list):
                         # Create row for Excel
-                        pdf_display_name = pdf_file if idx == 0 else f"{pdf_file}_entity_{idx+1}"
+                        if len(kpi_results_list) > 1:
+                            # Multiple products/services from same company
+                            pdf_display_name = f"{pdf_file}_product_{idx+1}"
+                        else:
+                            # Single entity
+                            pdf_display_name = pdf_file
                         
                         row = {
                             "PDF_Name": pdf_display_name,
@@ -407,7 +419,7 @@ PDF CONTEXT:
                         all_results.append(row)
                     
                     if len(kpi_results_list) > 1:
-                        print(f"✓ Completed: {pdf_file} (found {len(kpi_results_list)} entities)")
+                        print(f"✓ Completed: {pdf_file} (found {len(kpi_results_list)} products/services)")
                     else:
                         print(f"✓ Completed: {pdf_file}")
                     
