@@ -41,8 +41,8 @@ class StreamlinedKPIExtractor:
             "temperature": 0.1
         }
     
-    def extract_pages_1_and_10(self, pdf_path: str) -> str:
-        """Extract text from page 1 and page 10 of PDF"""
+    def extract_key_pages(self, pdf_path: str) -> str:
+        """Extract text from page 1, page 10, and page 11 of PDF"""
         start_time = time.time()
         try:
             doc = fitz.open(pdf_path)
@@ -60,6 +60,13 @@ class StreamlinedKPIExtractor:
                 page10 = doc[9]  # 0-indexed
                 context += "#### PAGE 10 ####\n"
                 context += page10.get_text()
+                context += "\n\n"
+            
+            # Extract page 11 (if exists)
+            if len(doc) >= 11:
+                page11 = doc[10]  # 0-indexed
+                context += "#### PAGE 11 ####\n"
+                context += page11.get_text()
             
             doc.close()
             print(f"PDF extraction took {time.time() - start_time:.2f} seconds")
@@ -204,8 +211,8 @@ PDF CONTEXT:
         print(f"Processing PDF: {os.path.basename(pdf_path)}")
         
         try:
-            # Step 1: Extract pages 1 and 10
-            context = self.extract_pages_1_and_10(pdf_path)
+            # Step 1: Extract pages 1, 10, and 11
+            context = self.extract_key_pages(pdf_path)
             
             if not context.strip():
                 print("No content extracted from PDF")
@@ -299,37 +306,24 @@ PDF CONTEXT:
 
 def main():
     """Main function to run the KPI extractor"""
-    import argparse
+    print("="*60)
+    print("          PDF KPI EXTRACTION PIPELINE")
+    print("="*60)
+    print("Extracting pages: 1, 10, 11")
+    print("Processing 9 KPIs in single API call")
+    print("="*60)
     
-    parser = argparse.ArgumentParser(description="Streamlined PDF KPI Extraction")
-    parser.add_argument("--pdf_dir", type=str, 
-                       default="C:\\Users\\c-ManasA\\OneDrive - crisil.com\\Desktop\\New folder\\pdf's", 
-                       help="Directory containing PDF files")
-    parser.add_argument("--output", type=str, default="kpi_results.xlsx", help="Output Excel file")
-    parser.add_argument("--single_pdf", type=str, help="Process single PDF file")
+    # Default settings
+    pdf_dir = "C:\\Users\\c-ManasA\\OneDrive - crisil.com\\Desktop\\New folder\\pdf's"
+    output_file = "kpi_results.xlsx"
     
-    args = parser.parse_args()
-    
-    # Create extractor
+    # Create extractor and process directory
     extractor = StreamlinedKPIExtractor()
-    
-    if args.single_pdf:
-        # Process single PDF
-        if not os.path.isfile(args.single_pdf):
-            print(f"PDF file not found: {args.single_pdf}")
-            return
+    extractor.process_pdf_directory(pdf_dir, output_file)
         
-        results = extractor.process_single_pdf(args.single_pdf)
-        print(f"\nExtracted KPIs:")
-        for key, value in results.items():
-            print(f"{key}: {value}")
-    else:
-        # Process directory
-        extractor.process_pdf_directory(args.pdf_dir, args.output)
-        
-    print("\n" + "="*50)
-    print("KPI EXTRACTION COMPLETED")
-    print("="*50)
+    print("\n" + "="*60)
+    print("          KPI EXTRACTION COMPLETED")
+    print("="*60)
 
 if __name__ == "__main__":
     main()
