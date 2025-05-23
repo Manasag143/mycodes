@@ -302,7 +302,9 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Streamlined PDF KPI Extraction")
-    parser.add_argument("--pdf_dir", type=str, required=True, help="Directory containing PDF files")
+    parser.add_argument("--pdf_dir", type=str, 
+                       default="C:\\Users\\c-ManasA\\OneDrive - crisil.com\\Desktop\\New folder\\pdf's", 
+                       help="Directory containing PDF files")
     parser.add_argument("--output", type=str, default="kpi_results.xlsx", help="Output Excel file")
     parser.add_argument("--single_pdf", type=str, help="Process single PDF file")
     
@@ -324,6 +326,10 @@ def main():
     else:
         # Process directory
         extractor.process_pdf_directory(args.pdf_dir, args.output)
+        
+    print("\n" + "="*50)
+    print("KPI EXTRACTION COMPLETED")
+    print("="*50)
 
 if __name__ == "__main__":
     main()
