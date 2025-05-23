@@ -87,10 +87,13 @@ CRITICAL INSTRUCTIONS:
 - Return ONLY the JSON object, no additional text or explanations
 - Do not add any commentary or notes
 - For codes, extract only the numeric digits
-- For financial figures, extract only the number without currency symbols
 - For CIN, extract the complete alphanumeric code
 - For financial year, use format like "2023-24" or "2023"
-- NOTE: Product category description (field 5) and product/service description (field 8) are often the same - this is expected
+- For company name, extract the complete official name as stated
+- For turnover amounts: Look for revenue, sales, turnover figures in segment reporting, financial statements, or notes
+- For turnover values: Return only the numerical amount without currency symbols (Rs, ₹, INR) or units (crores, lakhs)
+- Product category turnover and highest product turnover might be the same if company has single main segment
+- Look in pages for terms like: "Revenue from operations", "Segment revenue", "Turnover", "Sales", "Income from operations"
 
 <|eot_id|><|start_header_id|>user<|end_header_id|>
 
@@ -315,32 +318,27 @@ PDF CONTEXT:
             
             # Save batch results to Excel
             if batch_results:
-                # Create batch-specific filename
+                # Save current batch only
                 base_name = output_excel.replace('.xlsx', '')
                 batch_filename = f"{base_name}_batch_{batch_num}.xlsx"
                 
-                # Save current batch
                 batch_df = pd.DataFrame(batch_results)
                 batch_df.to_excel(batch_filename, index=False)
                 
-                # Save cumulative results (all processed so far)
-                cumulative_filename = f"{base_name}_cumulative.xlsx"
+                # Save cumulative results (all processed so far) - this is the main file
                 cumulative_df = pd.DataFrame(all_results)
-                cumulative_df.to_excel(cumulative_filename, index=False)
+                cumulative_df.to_excel(output_excel, index=False)
                 
                 batch_time = time.time() - batch_start_time
                 print(f"\n📊 BATCH {batch_num} COMPLETED:")
                 print(f"   ✓ Processed: {len(batch_results)} PDFs")
                 print(f"   ✓ Time taken: {batch_time:.2f} seconds")
                 print(f"   ✓ Batch saved: {batch_filename}")
-                print(f"   ✓ Cumulative saved: {cumulative_filename}")
+                print(f"   ✓ Main file updated: {output_excel}")
                 print(f"   ✓ Total processed so far: {len(all_results)} PDFs")
         
-        # Create final consolidated Excel file
+        # Final summary (no need to create another file as main file is already updated)
         if all_results:
-            final_df = pd.DataFrame(all_results)
-            final_df.to_excel(output_excel, index=False)
-            
             total_time = time.time() - start_time
             print(f"\n" + "="*60)
             print("🎉 ALL PROCESSING COMPLETED!")
@@ -349,7 +347,7 @@ PDF CONTEXT:
             print(f"✓ Total time taken: {total_time:.2f} seconds")
             print(f"✓ Average time per PDF: {total_time/len(all_results):.2f} seconds")
             print(f"✓ Final results saved: {output_excel}")
-            print(f"✓ Batch files created: {(len(pdf_files) + batch_size - 1) // batch_size}")
+            print(f"✓ Individual batch files: {(len(pdf_files) + batch_size - 1) // batch_size}")
             print("="*60)
         else:
             print("No results to save")
