@@ -292,42 +292,6 @@ PDF CONTEXT:
             print(f"JSON parsing error: {e}")
             return [self._get_empty_result()]
     
-    def _deduplicate_by_product_category(self, kpi_results_list: List[Dict[str, str]]) -> List[Dict[str, str]]:
-        """Remove duplicate entries based on product category description"""
-        if not kpi_results_list or len(kpi_results_list) <= 1:
-            return kpi_results_list
-        
-        # Track seen product category descriptions
-        seen_descriptions = set()
-        deduplicated_results = []
-        
-        for result in kpi_results_list:
-            product_desc = result.get("product_category_description", "").strip().lower()
-            highest_desc = result.get("highest_product_description", "").strip().lower()
-            
-            # Create a unique key combining both descriptions
-            # This handles cases where either field might be the same
-            unique_key = f"{product_desc}||{highest_desc}"
-            
-            # Skip if we've seen this combination before
-            if unique_key in seen_descriptions:
-                print(f"  Skipping duplicate product: '{product_desc}' / '{highest_desc}'")
-                continue
-            
-            # Skip if both descriptions are empty or just "-"
-            if (product_desc in ["", "-"] and highest_desc in ["", "-"]):
-                if len([r for r in deduplicated_results if 
-                       r.get("product_category_description", "").strip().lower() in ["", "-"] and
-                       r.get("highest_product_description", "").strip().lower() in ["", "-"]]) > 0:
-                    print(f"  Skipping duplicate empty/missing product descriptions")
-                    continue
-            
-            seen_descriptions.add(unique_key)
-            deduplicated_results.append(result)
-            print(f"  Keeping unique product: '{product_desc}' / '{highest_desc}'")
-        
-        return deduplicated_results
-    
     def _validate_json_keys(self, result: Dict[str, str]) -> Dict[str, str]:
         """Validate and ensure all expected keys are present in JSON"""
         expected_keys = [
@@ -428,13 +392,10 @@ PDF CONTEXT:
                     # Extract KPIs (may return multiple entities)
                     kpi_results_list = self.process_single_pdf(pdf_path)
                     
-                    # Deduplicate based on product category description
-                    deduplicated_results = self._deduplicate_by_product_category(kpi_results_list)
-                    
                     # Handle multiple entities from same PDF
-                    for idx, kpi_results in enumerate(deduplicated_results):
+                    for idx, kpi_results in enumerate(kpi_results_list):
                         # Create row for Excel
-                        if len(deduplicated_results) > 1:
+                        if len(kpi_results_list) > 1:
                             # Multiple products/services from same company
                             pdf_display_name = f"{pdf_file}_product_{idx+1}"
                         else:
@@ -457,10 +418,8 @@ PDF CONTEXT:
                         batch_results.append(row)
                         all_results.append(row)
                     
-                    if len(kpi_results_list) > len(deduplicated_results):
-                        print(f"✓ Completed: {pdf_file} (found {len(kpi_results_list)} entries, deduplicated to {len(deduplicated_results)} unique products)")
-                    elif len(deduplicated_results) > 1:
-                        print(f"✓ Completed: {pdf_file} (found {len(deduplicated_results)} unique products/services)")
+                    if len(kpi_results_list) > 1:
+                        print(f"✓ Completed: {pdf_file} (found {len(kpi_results_list)} products/services)")
                     else:
                         print(f"✓ Completed: {pdf_file}")
                     
