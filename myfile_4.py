@@ -1,541 +1,36 @@
 import os
-import re
-import time
 import pandas as pd
-import fitz  # PyMuPDF
-from typing import Dict, List, Any, Optional, Tuple
-from dataclasses import dataclass
-from collections import defaultdict
-import unicodedata
+from pathlib import Path
+from typing import Dict, List, Any
+import json
 
-@dataclass
-class ExtractionResult:
-    """Data class for storing extraction results"""
-    value: str
-    confidence: float
-    page_number: int
-    context: str = ""
-    extraction_method: str = ""
+# Import Docling components
+from docling.document_converter import DocumentConverter
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 
-class TextProcessor:
-    """Advanced text processing utilities"""
-    
-    @staticmethod
-    def clean_text(text: str) -> str:
-        """Clean and normalize text"""
-        # Remove extra whitespace and normalize unicode
-        text = unicodedata.normalize('NFKD', text)
-        text = re.sub(r'\s+', ' ', text)
-        text = text.strip()
-        return text
-    
-    @staticmethod
-    def extract_tables(text: str) -> List[List[str]]:
-        """Extract table-like structures from text"""
-        lines = text.split('\n')
-        tables = []
-        current_table = []
-        
-        for line in lines:
-            # Check if line looks like a table row (has multiple whitespace-separated values)
-            if re.search(r'\s{2,}', line) and len(line.split()) >= 2:
-                # Split by multiple whitespaces
-                row = re.split(r'\s{2,}', line.strip())
-                current_table.append(row)
-            else:
-                if current_table and len(current_table) >= 2:
-                    tables.append(current_table)
-                current_table = []
-        
-        if current_table and len(current_table) >= 2:
-            tables.append(current_table)
-        
-        return tables
-    
-    @staticmethod
-    def find_key_value_pairs(text: str) -> Dict[str, str]:
-        """Extract key-value pairs from text"""
-        pairs = {}
-        
-        # Pattern for key: value
-        pattern1 = r'([A-Za-z\s]+?):\s*([^\n:]+?)(?=\n|$|[A-Za-z\s]+:)'
-        matches1 = re.finditer(pattern1, text)
-        for match in matches1:
-            key = match.group(1).strip()
-            value = match.group(2).strip()
-            if len(key) > 2 and len(value) > 0:
-                pairs[key.lower()] = value
-        
-        # Pattern for key followed by value on next line or same line
-        pattern2 = r'([A-Za-z\s]{5,}?)[\s]*\n?[\s]*([A-Z0-9][^\n]+?)(?=\n|$)'
-        matches2 = re.finditer(pattern2, text)
-        for match in matches2:
-            key = match.group(1).strip()
-            value = match.group(2).strip()
-            if len(key) > 4 and len(value) > 2 and not key.lower() in pairs:
-                pairs[key.lower()] = value
-        
-        return pairs
-
-class AdvancedRuleBasedExtractor:
-    """Enhanced rule-based extractor with multiple extraction strategies"""
+class DoclingPDFExtractor:
+    """Basic PDF data extractor using Docling"""
     
     def __init__(self):
-        self.text_processor = TextProcessor()
-        self.patterns = self._initialize_comprehensive_patterns()
-        self.keywords = self._initialize_keywords()
-    
-    def _initialize_comprehensive_patterns(self) -> Dict[str, List[Dict]]:
-        """Initialize comprehensive regex patterns"""
-        return {
-            "cin": [
-                # Direct CIN patterns
-                {
-                    "pattern": r"(?i)(?:CIN|Corporate\s+Identity\s+Number|Corporate\s+Identification\s+Number|Registration\s+Number)[\s:]*([LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})",
-                    "confidence": 0.95,
-                    "method": "direct_label"
-                },
-                {
-                    "pattern": r"\b([LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})\b",
-                    "confidence": 0.90,
-                    "method": "format_match"
-                },
-                # In parentheses or brackets
-                {
-                    "pattern": r"[\(\[]([LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})[\)\]]",
-                    "confidence": 0.85,
-                    "method": "parentheses"
-                }
-            ],
-            "financial_year": [
-                # Various FY patterns
-                {
-                    "pattern": r"(?i)(?:financial\s+year|FY|F\.Y\.|year\s+ended|period\s+ended|reporting\s+period)[\s:]*(\d{4}[-/]\d{2,4})",
-                    "confidence": 0.95,
-                    "method": "direct_label"
-                },
-                {
-                    "pattern": r"(?i)(?:for\s+the\s+year\s+ended|as\s+at|as\s+on)[\s]*(\d{1,2}(?:st|nd|rd|th)?\s+\w+\s+\d{4})",
-                    "confidence": 0.90,
-                    "method": "date_format"
-                },
-                {
-                    "pattern": r"(?i)(?:March|march)\s+(\d{4})",
-                    "confidence": 0.85,
-                    "method": "march_year"
-                },
-                {
-                    "pattern": r"\b(\d{4}[-/]\d{2,4})\b",
-                    "confidence": 0.70,
-                    "method": "standalone_year"
-                }
-            ],
-            "product_codes": [
-                # 4 and 8 digit codes
-                {
-                    "pattern": r"(?i)(?:ITC|NPCS|HSN|Product\s+Code|Classification\s+Code|Code)[\s:]*(\d{4,8})",
-                    "confidence": 0.90,
-                    "method": "direct_label"
-                },
-                {
-                    "pattern": r"(?i)(?:under\s+code|code\s+number|classification)[\s:]*(\d{4,8})",
-                    "confidence": 0.85,
-                    "method": "contextual"
-                },
-                {
-                    "pattern": r"\b(\d{4})\b|\b(\d{8})\b",
-                    "confidence": 0.60,
-                    "method": "numeric_match"
-                }
-            ],
-            "turnover_amounts": [
-                # Comprehensive turnover patterns
-                {
-                    "pattern": r"(?i)(?:turnover|revenue|sales|income)[\s:]*(?:Rs\.?|₹|INR)?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s*(crores?|lakhs?|millions?|billions?|thousand)?",
-                    "confidence": 0.90,
-                    "method": "labeled_amount"
-                },
-                {
-                    "pattern": r"(?:Rs\.?|₹|INR)\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s*(crores?|lakhs?|millions?|billions?)?",
-                    "confidence": 0.80,
-                    "method": "currency_amount"
-                },
-                {
-                    "pattern": r"\b(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s*(crores?|lakhs?|millions?|billions?)",
-                    "confidence": 0.75,
-                    "method": "amount_unit"
-                },
-                {
-                    "pattern": r"\b(\d{6,})\b",
-                    "confidence": 0.60,
-                    "method": "large_number"
-                }
-            ]
-        }
-    
-    def _initialize_keywords(self) -> Dict[str, List[str]]:
-        """Initialize keyword mappings for different fields"""
-        return {
-            "cin": ["cin", "corporate identity", "registration number", "company registration"],
-            "financial_year": ["financial year", "fy", "year ended", "period ended", "reporting period", "annual report"],
-            "product_category": ["product category", "service category", "business segment", "main business", "principal activity"],
-            "product_description": ["description", "nature of business", "main activity", "principal business"],
-            "product_codes": ["itc", "npcs", "hsn", "product code", "classification", "commodity"],
-            "turnover": ["turnover", "revenue", "sales", "income", "gross revenue", "net revenue"],
-            "highest_turnover": ["highest", "maximum", "main", "primary", "principal", "major"]
-        }
-    
-    def extract_information(self, pages: List[Dict[str, Any]], info_type: str, **kwargs) -> ExtractionResult:
-        """Main extraction method that tries multiple approaches"""
+        # Configure pipeline options for better PDF processing
+        pipeline_options = PdfPipelineOptions()
+        pipeline_options.do_ocr = True  # Enable OCR for scanned documents
+        pipeline_options.do_table_structure = True  # Extract table structures
+        pipeline_options.table_structure_options.do_cell_matching = True
         
-        # Strategy 1: Direct pattern matching
-        result = self._extract_with_patterns(pages, info_type, **kwargs)
-        if result.confidence > 0.7:
-            return result
+        # Initialize document converter
+        self.converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: pipeline_options,
+            }
+        )
         
-        # Strategy 2: Table extraction
-        table_result = self._extract_from_tables(pages, info_type, **kwargs)
-        if table_result.confidence > result.confidence:
-            result = table_result
-        
-        # Strategy 3: Key-value pair extraction
-        kv_result = self._extract_from_key_value_pairs(pages, info_type, **kwargs)
-        if kv_result.confidence > result.confidence:
-            result = kv_result
-        
-        # Strategy 4: Contextual search
-        context_result = self._extract_with_context_search(pages, info_type, **kwargs)
-        if context_result.confidence > result.confidence:
-            result = context_result
-        
-        return result if result.confidence > 0 else ExtractionResult("Information not found", 0.0, 0)
-    
-    def _extract_with_patterns(self, pages: List[Dict[str, Any]], info_type: str, **kwargs) -> ExtractionResult:
-        """Extract using regex patterns"""
-        pattern_key = self._get_pattern_key(info_type, **kwargs)
-        if pattern_key not in self.patterns:
-            return ExtractionResult("Information not found", 0.0, 0)
-        
-        best_result = ExtractionResult("Information not found", 0.0, 0)
-        
-        # Determine page range based on info type
-        page_range = self._get_page_range(info_type, len(pages))
-        
-        for page in pages[page_range[0]:page_range[1]]:
-            text = self.text_processor.clean_text(page["text"])
-            
-            for pattern_info in self.patterns[pattern_key]:
-                matches = re.finditer(pattern_info["pattern"], text, re.IGNORECASE | re.MULTILINE)
-                
-                for match in matches:
-                    extracted_value = self._extract_match_value(match, info_type, **kwargs)
-                    if extracted_value and self._validate_extraction(extracted_value, info_type, **kwargs):
-                        normalized_value = self._normalize_value(extracted_value, info_type)
-                        context = self._get_context(text, match.start(), match.end())
-                        
-                        result = ExtractionResult(
-                            value=normalized_value,
-                            confidence=pattern_info["confidence"],
-                            page_number=page["page_num"],
-                            context=context,
-                            extraction_method=f"pattern_{pattern_info['method']}"
-                        )
-                        
-                        if result.confidence > best_result.confidence:
-                            best_result = result
-        
-        return best_result
-    
-    def _extract_from_tables(self, pages: List[Dict[str, Any]], info_type: str, **kwargs) -> ExtractionResult:
-        """Extract information from table structures"""
-        best_result = ExtractionResult("Information not found", 0.0, 0)
-        
-        for page in pages:
-            tables = self.text_processor.extract_tables(page["text"])
-            
-            for table in tables:
-                result = self._search_in_table(table, info_type, page["page_num"], **kwargs)
-                if result.confidence > best_result.confidence:
-                    best_result = result
-        
-        return best_result
-    
-    def _extract_from_key_value_pairs(self, pages: List[Dict[str, Any]], info_type: str, **kwargs) -> ExtractionResult:
-        """Extract from key-value pair structures"""
-        best_result = ExtractionResult("Information not found", 0.0, 0)
-        
-        for page in pages:
-            kv_pairs = self.text_processor.find_key_value_pairs(page["text"])
-            
-            for key, value in kv_pairs.items():
-                if self._is_relevant_key(key, info_type):
-                    if self._validate_extraction(value, info_type, **kwargs):
-                        normalized_value = self._normalize_value(value, info_type)
-                        
-                        result = ExtractionResult(
-                            value=normalized_value,
-                            confidence=0.80,
-                            page_number=page["page_num"],
-                            context=f"{key}: {value}",
-                            extraction_method="key_value_pair"
-                        )
-                        
-                        if result.confidence > best_result.confidence:
-                            best_result = result
-        
-        return best_result
-    
-    def _extract_with_context_search(self, pages: List[Dict[str, Any]], info_type: str, **kwargs) -> ExtractionResult:
-        """Extract using contextual keyword search"""
-        keywords = self.keywords.get(self._get_keyword_group(info_type), [])
-        best_result = ExtractionResult("Information not found", 0.0, 0)
-        
-        for page in pages:
-            text = page["text"].lower()
-            
-            for keyword in keywords:
-                positions = [m.start() for m in re.finditer(re.escape(keyword), text)]
-                
-                for pos in positions:
-                    # Extract surrounding context
-                    start = max(0, pos - 200)
-                    end = min(len(text), pos + 200)
-                    context = text[start:end]
-                    
-                    # Apply patterns to this context
-                    result = self._extract_from_context(context, info_type, page["page_num"], **kwargs)
-                    if result.confidence > best_result.confidence:
-                        best_result = result
-        
-        return best_result
-    
-    def _search_in_table(self, table: List[List[str]], info_type: str, page_num: int, **kwargs) -> ExtractionResult:
-        """Search for information within a table structure"""
-        keywords = self.keywords.get(self._get_keyword_group(info_type), [])
-        
-        for row_idx, row in enumerate(table):
-            for col_idx, cell in enumerate(row):
-                cell_lower = cell.lower()
-                
-                # Check if this cell contains relevant keywords
-                for keyword in keywords:
-                    if keyword in cell_lower:
-                        # Look for value in adjacent cells
-                        candidates = []
-                        
-                        # Same row, next column
-                        if col_idx + 1 < len(row):
-                            candidates.append(row[col_idx + 1])
-                        
-                        # Next row, same column
-                        if row_idx + 1 < len(table) and col_idx < len(table[row_idx + 1]):
-                            candidates.append(table[row_idx + 1][col_idx])
-                        
-                        # Next row, next column
-                        if (row_idx + 1 < len(table) and 
-                            col_idx + 1 < len(table[row_idx + 1])):
-                            candidates.append(table[row_idx + 1][col_idx + 1])
-                        
-                        for candidate in candidates:
-                            if self._validate_extraction(candidate, info_type, **kwargs):
-                                normalized_value = self._normalize_value(candidate, info_type)
-                                return ExtractionResult(
-                                    value=normalized_value,
-                                    confidence=0.75,
-                                    page_number=page_num,
-                                    context=f"Table: {cell} -> {candidate}",
-                                    extraction_method="table_search"
-                                )
-        
-        return ExtractionResult("Information not found", 0.0, 0)
-    
-    def _extract_from_context(self, context: str, info_type: str, page_num: int, **kwargs) -> ExtractionResult:
-        """Extract information from a context snippet"""
-        pattern_key = self._get_pattern_key(info_type, **kwargs)
-        if pattern_key not in self.patterns:
-            return ExtractionResult("Information not found", 0.0, 0)
-        
-        for pattern_info in self.patterns[pattern_key]:
-            matches = re.finditer(pattern_info["pattern"], context, re.IGNORECASE)
-            
-            for match in matches:
-                extracted_value = self._extract_match_value(match, info_type, **kwargs)
-                if extracted_value and self._validate_extraction(extracted_value, info_type, **kwargs):
-                    normalized_value = self._normalize_value(extracted_value, info_type)
-                    
-                    return ExtractionResult(
-                        value=normalized_value,
-                        confidence=pattern_info["confidence"] * 0.9,  # Slightly lower confidence
-                        page_number=page_num,
-                        context=context[:100] + "..." if len(context) > 100 else context,
-                        extraction_method=f"context_{pattern_info['method']}"
-                    )
-        
-        return ExtractionResult("Information not found", 0.0, 0)
-    
-    # Helper methods
-    def _get_pattern_key(self, info_type: str, **kwargs) -> str:
-        """Get the pattern key for a given info type"""
-        if info_type == "cin":
-            return "cin"
-        elif info_type == "financial_year":
-            return "financial_year"
-        elif info_type in ["product_code_4", "product_code_8"]:
-            return "product_codes"
-        elif info_type == "turnover":
-            return "turnover_amounts"
-        else:
-            return "product_codes"  # Default
-    
-    def _get_keyword_group(self, info_type: str) -> str:
-        """Get keyword group for info type"""
-        mapping = {
-            "cin": "cin",
-            "financial_year": "financial_year",
-            "product_code_4": "product_codes",
-            "product_code_8": "product_codes",
-            "description_category": "product_category",
-            "description_product": "product_description",
-            "turnover": "turnover",
-            "turnover_highest": "highest_turnover"
-        }
-        return mapping.get(info_type, "product_codes")
-    
-    def _get_page_range(self, info_type: str, total_pages: int) -> Tuple[int, int]:
-        """Get the page range to search for different info types"""
-        if info_type in ["cin", "financial_year"]:
-            return (0, min(5, total_pages))  # First 5 pages
-        elif info_type in ["product_code_4", "product_code_8", "description_category", "description_product"]:
-            return (0, min(15, total_pages))  # First 15 pages
-        else:  # turnover information
-            return (0, total_pages)  # All pages
-    
-    def _extract_match_value(self, match, info_type: str, **kwargs) -> str:
-        """Extract the relevant value from a regex match"""
-        groups = match.groups()
-        if not groups:
-            return match.group(0)
-        
-        # For most patterns, the first group contains the value
-        for group in groups:
-            if group and group.strip():
-                return group.strip()
-        
-        return match.group(0)
-    
-    def _validate_extraction(self, value: str, info_type: str, **kwargs) -> bool:
-        """Validate extracted value based on info type"""
-        if not value or len(value.strip()) == 0:
-            return False
-        
-        value = value.strip()
-        
-        if info_type == "cin":
-            return len(value) == 21 and re.match(r'^[LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6}$', value)
-        
-        elif info_type == "financial_year":
-            return (re.match(r'\d{4}[-/]\d{2,4}', value) or 
-                   re.match(r'\d{1,2}(?:st|nd|rd|th)?\s+\w+\s+\d{4}', value) or
-                   re.match(r'\d{4}', value))
-        
-        elif info_type == "product_code_4":
-            return len(value) == 4 and value.isdigit()
-        
-        elif info_type == "product_code_8":
-            return len(value) == 8 and value.isdigit()
-        
-        elif info_type == "turnover":
-            # Remove commas and check if it's a valid number
-            clean_value = re.sub(r'[,\s]', '', value)
-            try:
-                float(clean_value)
-                return True
-            except ValueError:
-                return False
-        
-        elif info_type in ["description_category", "description_product"]:
-            return len(value.split()) >= 2 and not value.isdigit()
-        
-        return True
-    
-    def _normalize_value(self, value: str, info_type: str) -> str:
-        """Normalize extracted value"""
-        value = value.strip()
-        
-        if info_type == "financial_year":
-            # Convert to YYYY-YY format
-            if re.match(r'\d{4}[-/]\d{4}', value):
-                parts = re.split(r'[-/]', value)
-                return f"{parts[0]}-{parts[1][-2:]}"
-            elif re.match(r'\d{4}', value):
-                year = int(value)
-                return f"{year}-{str(year+1)[-2:]}"
-        
-        elif info_type == "turnover":
-            # Remove commas but keep the number clean
-            return re.sub(r'[,\s]', '', value)
-        
-        return value
-    
-    def _is_relevant_key(self, key: str, info_type: str) -> bool:
-        """Check if a key is relevant for the info type"""
-        keywords = self.keywords.get(self._get_keyword_group(info_type), [])
-        key_lower = key.lower()
-        
-        return any(keyword in key_lower for keyword in keywords)
-    
-    def _get_context(self, text: str, start: int, end: int, window: int = 100) -> str:
-        """Get context around a match"""
-        context_start = max(0, start - window)
-        context_end = min(len(text), end + window)
-        return text[context_start:context_end].strip()
-
-class PDFExtractor:
-    """Enhanced PDF text extraction"""
-    
-    def extract_text_from_pdf(self, pdf_path: str) -> List[Dict[str, Any]]:
-        """Extract text from PDF with better structure preservation"""
-        start_time = time.time()
-        try:
-            doc = fitz.open(pdf_path)
-            pages = []
-            
-            for page_num, page in enumerate(doc):
-                # Get text with layout preservation
-                text = page.get_text()
-                
-                # Also try to get text blocks for better structure
-                blocks = page.get_text("blocks")
-                structured_text = ""
-                for block in blocks:
-                    if len(block) >= 5:  # Text block
-                        structured_text += block[4] + "\n"
-                
-                pages.append({
-                    "page_num": page_num + 1,
-                    "text": text,
-                    "structured_text": structured_text,
-                    "blocks": blocks
-                })
-            
-            doc.close()
-            print(f"PDF text extraction took {time.time() - start_time:.2f} seconds")
-            return pages
-            
-        except Exception as e:
-            print(f"PDF extraction error: {e}")
-            raise
-
-class PDFRegulatoryExtractor:
-    """Enhanced main extractor class"""
-    
-    def __init__(self):
-        self.pdf_extractor = PDFExtractor()
-        self.rule_extractor = AdvancedRuleBasedExtractor()
-        
-        self.questions = [
+        # Define fields we want to extract
+        self.target_fields = [
             "Corporate identity number (CIN) of company",
-            "Financial year to which financial statements relates",
+            "Financial year to which financial statements relates", 
             "Product or service category code (ITC/ NPCS 4 digit code)",
             "Description of the product or service category",
             "Turnover of the product or service category (in Rupees)",
@@ -544,164 +39,317 @@ class PDFRegulatoryExtractor:
             "Turnover of highest contributing product or service (in Rupees)"
         ]
     
-    def process_pdf(self, pdf_path: str) -> Dict[str, str]:
-        """Process PDF with enhanced extraction"""
-        total_start_time = time.time()
-        print(f"Processing PDF: {pdf_path}")
+    def extract_from_pdf(self, pdf_path: str) -> Dict[str, Any]:
+        """Extract structured data from a single PDF"""
+        print(f"Processing: {pdf_path}")
         
         try:
-            # Extract text
-            pages = self.pdf_extractor.extract_text_from_pdf(pdf_path)
-            answers = {}
+            # Convert PDF to Docling document
+            result = self.converter.convert(pdf_path)
+            doc = result.document
             
-            # Extract each piece of information
-            print("Extracting CIN...")
-            cin_result = self.rule_extractor.extract_information(pages, "cin")
-            answers[self.questions[0]] = cin_result.value
-            print(f"CIN: {cin_result.value} (confidence: {cin_result.confidence:.2f})")
+            # Get document structure
+            print(f"Document has {len(doc.pages)} pages")
             
-            print("Extracting Financial Year...")
-            fy_result = self.rule_extractor.extract_information(pages, "financial_year")
-            answers[self.questions[1]] = fy_result.value
-            print(f"FY: {fy_result.value} (confidence: {fy_result.confidence:.2f})")
+            # Extract different types of content
+            extraction_result = {
+                'text_content': self._extract_text_content(doc),
+                'tables': self._extract_tables(doc),
+                'structured_data': self._extract_structured_data(doc),
+                'form_fields': self._extract_form_fields(doc)
+            }
             
-            print("Extracting 4-digit product code...")
-            code4_result = self.rule_extractor.extract_information(pages, "product_code_4")
-            answers[self.questions[2]] = code4_result.value
-            print(f"4-digit code: {code4_result.value} (confidence: {code4_result.confidence:.2f})")
-            
-            print("Extracting product category description...")
-            desc_cat_result = self.rule_extractor.extract_information(pages, "description_category")
-            answers[self.questions[3]] = desc_cat_result.value
-            print(f"Category desc: {desc_cat_result.value[:50]}... (confidence: {desc_cat_result.confidence:.2f})")
-            
-            print("Extracting category turnover...")
-            turnover_cat_result = self.rule_extractor.extract_information(pages, "turnover")
-            answers[self.questions[4]] = turnover_cat_result.value
-            print(f"Category turnover: {turnover_cat_result.value} (confidence: {turnover_cat_result.confidence:.2f})")
-            
-            print("Extracting 8-digit product code...")
-            code8_result = self.rule_extractor.extract_information(pages, "product_code_8")
-            answers[self.questions[5]] = code8_result.value
-            print(f"8-digit code: {code8_result.value} (confidence: {code8_result.confidence:.2f})")
-            
-            print("Extracting product description...")
-            desc_prod_result = self.rule_extractor.extract_information(pages, "description_product")
-            answers[self.questions[6]] = desc_prod_result.value
-            print(f"Product desc: {desc_prod_result.value[:50]}... (confidence: {desc_prod_result.confidence:.2f})")
-            
-            print("Extracting highest turnover...")
-            turnover_high_result = self.rule_extractor.extract_information(pages, "turnover_highest")
-            answers[self.questions[7]] = turnover_high_result.value
-            print(f"Highest turnover: {turnover_high_result.value} (confidence: {turnover_high_result.confidence:.2f})")
-            
-            print(f"Completed processing in {time.time() - total_start_time:.2f} seconds")
-            return answers
+            return extraction_result
             
         except Exception as e:
-            print(f"Error processing PDF: {e}")
-            return {question: f"Error: {str(e)}" for question in self.questions}
+            print(f"Error processing {pdf_path}: {e}")
+            return {'error': str(e)}
     
-    def process_pdfs_batch(self, pdf_dir: str, output_excel: str):
-        """Process multiple PDFs"""
-        batch_start_time = time.time()
-        print(f"Processing PDFs in: {pdf_dir}")
+    def _extract_text_content(self, doc) -> Dict[str, str]:
+        """Extract text content from the document"""
+        text_data = {}
         
-        if not os.path.isdir(pdf_dir):
-            print(f"Directory not found: {pdf_dir}")
-            return
+        # Get full document text
+        full_text = doc.export_to_markdown()
+        text_data['full_document'] = full_text
         
-        pdf_files = [f for f in os.listdir(pdf_dir) if f.lower().endswith('.pdf')]
+        # Extract text from specific pages (1 and 10)
+        for page_num in [1, 10]:
+            if page_num <= len(doc.pages):
+                page = doc.pages[page_num - 1]
+                page_text = ""
+                
+                # Extract text from all elements on the page
+                for element in page.body.elements:
+                    if hasattr(element, 'text'):
+                        page_text += element.text + "\n"
+                
+                text_data[f'page_{page_num}'] = page_text
+        
+        return text_data
+    
+    def _extract_tables(self, doc) -> List[Dict]:
+        """Extract table data from the document"""
+        tables_data = []
+        
+        for page_num, page in enumerate(doc.pages, 1):
+            for element in page.body.elements:
+                if element.category == "table":
+                    try:
+                        # Convert table to pandas DataFrame
+                        table_df = element.export_to_dataframe()
+                        
+                        table_info = {
+                            'page': page_num,
+                            'table_data': table_df.to_dict('records'),
+                            'columns': list(table_df.columns),
+                            'shape': table_df.shape
+                        }
+                        tables_data.append(table_info)
+                        
+                    except Exception as e:
+                        print(f"Error extracting table on page {page_num}: {e}")
+        
+        return tables_data
+    
+    def _extract_structured_data(self, doc) -> Dict[str, Any]:
+        """Extract structured data elements"""
+        structured = {
+            'headings': [],
+            'paragraphs': [],
+            'lists': [],
+            'key_value_pairs': []
+        }
+        
+        for page_num, page in enumerate(doc.pages, 1):
+            for element in page.body.elements:
+                element_data = {
+                    'page': page_num,
+                    'text': getattr(element, 'text', ''),
+                    'category': element.category
+                }
+                
+                if element.category == "title" or element.category == "section-header":
+                    structured['headings'].append(element_data)
+                elif element.category == "paragraph":
+                    structured['paragraphs'].append(element_data)
+                elif element.category == "list":
+                    structured['lists'].append(element_data)
+        
+        return structured
+    
+    def _extract_form_fields(self, doc) -> Dict[str, str]:
+        """Extract form-like data by looking for key-value patterns"""
+        form_data = {}
+        
+        # Get all text content
+        all_text = ""
+        for page in doc.pages:
+            for element in page.body.elements:
+                if hasattr(element, 'text'):
+                    all_text += element.text + "\n"
+        
+        # Look for our target fields using simple pattern matching
+        form_data.update(self._extract_target_fields(all_text))
+        
+        return form_data
+    
+    def _extract_target_fields(self, text: str) -> Dict[str, str]:
+        """Extract specific target fields from text"""
+        import re
+        
+        results = {}
+        
+        # CIN extraction
+        cin_match = re.search(r'([LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})', text, re.IGNORECASE)
+        if cin_match:
+            results["Corporate identity number (CIN) of company"] = cin_match.group(1).upper()
+        else:
+            results["Corporate identity number (CIN) of company"] = "Not found"
+        
+        # Financial year extraction
+        fy_match = re.search(r'(\d{4}[-/]\d{2,4})', text)
+        if fy_match:
+            results["Financial year to which financial statements relates"] = fy_match.group(1)
+        else:
+            results["Financial year to which financial statements relates"] = "Not found"
+        
+        # 4-digit code extraction
+        four_digit_codes = re.findall(r'\b(\d{4})\b', text)
+        # Filter out years
+        filtered_codes = [code for code in four_digit_codes if not (1900 <= int(code) <= 2030)]
+        if filtered_codes:
+            results["Product or service category code (ITC/ NPCS 4 digit code)"] = filtered_codes[0]
+        else:
+            results["Product or service category code (ITC/ NPCS 4 digit code)"] = "Not found"
+        
+        # 8-digit code extraction
+        eight_digit_codes = re.findall(r'\b(\d{8})\b', text)
+        if eight_digit_codes:
+            results["Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)"] = eight_digit_codes[0]
+        else:
+            results["Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)"] = "Not found"
+        
+        # Turnover extraction (find largest numbers)
+        large_numbers = re.findall(r'\b(\d{6,})\b', text)
+        if large_numbers:
+            # Convert to integers and find the largest
+            numbers = [int(num) for num in large_numbers]
+            largest = max(numbers)
+            results["Turnover of highest contributing product or service (in Rupees)"] = str(largest)
+            
+            # For category turnover, use a smaller number if available
+            if len(numbers) > 1:
+                numbers.sort()
+                results["Turnover of the product or service category (in Rupees)"] = str(numbers[-2])
+            else:
+                results["Turnover of the product or service category (in Rupees)"] = str(largest)
+        else:
+            results["Turnover of highest contributing product or service (in Rupees)"] = "Not found"
+            results["Turnover of the product or service category (in Rupees)"] = "Not found"
+        
+        # Description extraction (simplified)
+        results["Description of the product or service category"] = "Text analysis needed"
+        results["Description of the product or service"] = "Text analysis needed"
+        
+        return results
+    
+    def save_detailed_analysis(self, pdf_path: str, output_dir: str = "docling_output"):
+        """Save detailed analysis of PDF structure"""
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Extract all data
+        extraction_result = self.extract_from_pdf(pdf_path)
+        
+        # Save raw extraction to JSON
+        json_path = os.path.join(output_dir, f"{Path(pdf_path).stem}_raw_extraction.json")
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(extraction_result, f, indent=2, ensure_ascii=False, default=str)
+        
+        # Save text content to file
+        if 'text_content' in extraction_result:
+            text_path = os.path.join(output_dir, f"{Path(pdf_path).stem}_text_content.txt")
+            with open(text_path, 'w', encoding='utf-8') as f:
+                for key, content in extraction_result['text_content'].items():
+                    f.write(f"\n{'='*50}\n")
+                    f.write(f"{key.upper()}\n")
+                    f.write(f"{'='*50}\n")
+                    f.write(content)
+                    f.write("\n")
+        
+        # Save tables to Excel if any
+        if 'tables' in extraction_result and extraction_result['tables']:
+            excel_path = os.path.join(output_dir, f"{Path(pdf_path).stem}_tables.xlsx")
+            with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+                for i, table in enumerate(extraction_result['tables']):
+                    df = pd.DataFrame(table['table_data'])
+                    sheet_name = f"Table_Page_{table['page']}_{i+1}"
+                    df.to_excel(writer, sheet_name=sheet_name, index=False)
+        
+        print(f"Detailed analysis saved to {output_dir}")
+        return extraction_result
+    
+    def process_multiple_pdfs(self, pdf_directory: str, output_excel: str):
+        """Process multiple PDFs and save results to Excel"""
+        
+        pdf_files = [f for f in os.listdir(pdf_directory) if f.lower().endswith('.pdf')]
+        
         if not pdf_files:
-            print(f"No PDF files found in {pdf_dir}")
+            print(f"No PDF files found in {pdf_directory}")
             return
         
         print(f"Found {len(pdf_files)} PDF files")
-        results = []
+        
+        all_results = []
         
         for pdf_file in pdf_files:
-            pdf_path = os.path.join(pdf_dir, pdf_file)
+            pdf_path = os.path.join(pdf_directory, pdf_file)
+            
             try:
-                print(f"\n--- Processing {pdf_file} ---")
-                answers = self.process_pdf(pdf_path)
+                # Extract data
+                extraction_result = self.extract_from_pdf(pdf_path)
                 
-                result = {"PDF Filename": pdf_file}
-                result.update(answers)
-                results.append(result)
+                # Get form fields
+                if 'form_fields' in extraction_result:
+                    result_row = {"PDF Filename": pdf_file}
+                    result_row.update(extraction_result['form_fields'])
+                    all_results.append(result_row)
+                else:
+                    # Create error row
+                    result_row = {"PDF Filename": pdf_file}
+                    for field in self.target_fields:
+                        result_row[field] = "Extraction failed"
+                    all_results.append(result_row)
+                
+                print(f"Processed: {pdf_file}")
                 
             except Exception as e:
                 print(f"Error processing {pdf_file}: {e}")
-                result = {"PDF Filename": pdf_file}
-                result.update({question: f"Error: {str(e)}" for question in self.questions})
-                results.append(result)
+                # Create error row
+                result_row = {"PDF Filename": pdf_file}
+                for field in self.target_fields:
+                    result_row[field] = f"Error: {str(e)}"
+                all_results.append(result_row)
         
-        if results:
-            df = pd.DataFrame(results)
-            columns = ["PDF Filename"] + self.questions
-            df = df[columns]
+        # Save to Excel
+        if all_results:
+            df = pd.DataFrame(all_results)
             df.to_excel(output_excel, index=False)
-            print(f"\nResults saved to {output_excel}")
-        
-        print(f"Total processing time: {time.time() - batch_start_time:.2f} seconds")
+            print(f"Results saved to {output_excel}")
 
 def main():
+    """Main function with command line interface"""
     import argparse
-    parser = argparse.ArgumentParser(description="Enhanced PDF Regulatory Information Extraction")
-    parser.add_argument("--pdf_dir", type=str, default="pdfs", help="Directory containing PDF files")
-    parser.add_argument("--output", type=str, default="regulatory_info_results.xlsx", help="Output Excel file")
-    parser.add_argument("--single_pdf", type=str, default=None, help="Process a single PDF")
+    
+    parser = argparse.ArgumentParser(description="Docling PDF Data Extractor")
+    parser.add_argument("--pdf_path", type=str, help="Single PDF file to process")
+    parser.add_argument("--pdf_dir", type=str, help="Directory containing PDF files")
+    parser.add_argument("--output", type=str, default="docling_results.xlsx", help="Output Excel file")
+    parser.add_argument("--analyze", action="store_true", help="Save detailed analysis")
+    parser.add_argument("--output_dir", type=str, default="docling_output", help="Output directory for analysis")
+    
     args = parser.parse_args()
     
-    try:
-        print("Starting Enhanced PDF Regulatory Information Extraction")
-        start_time = time.time()
-        
-        pipeline = PDFRegulatoryExtractor()
-        
-        if args.single_pdf:
-            if not os.path.isfile(args.single_pdf):
-                print(f"PDF file not found: {args.single_pdf}")
-                return
-                
-            # Process single PDF
-            results = []
-            pdf_file = os.path.basename(args.single_pdf)
-            
-            try:
-                answers = pipeline.process_pdf(args.single_pdf)
-                
-                result = {"PDF Filename": pdf_file}
-                result.update(answers)
-                results.append(result)
-                
-                # Save results
-                df = pd.DataFrame(results)
-                columns = ["PDF Filename"] + pipeline.questions
-                df = df[columns]
-                df.to_excel(args.output, index=False)
-                print(f"\nResults saved to {args.output}")
-                
-                # Print detailed results
-                print("\n" + "="*80)
-                print("EXTRACTION RESULTS")
-                print("="*80)
-                for question, answer in answers.items():
-                    print(f"\n{question}:")
-                    print(f"  Answer: {answer}")
-                print("="*80)
-                
-            except Exception as e:
-                print(f"Error processing {args.single_pdf}: {e}")
+    # Initialize extractor
+    extractor = DoclingPDFExtractor()
+    
+    if args.pdf_path:
+        # Process single PDF
+        if args.analyze:
+            # Save detailed analysis
+            extraction_result = extractor.save_detailed_analysis(args.pdf_path, args.output_dir)
+            print("Detailed analysis complete!")
         else:
-            # Process directory of PDFs
-            pipeline.process_pdfs_batch(args.pdf_dir, args.output)
-        
-        print(f"\nProcessing completed successfully in {time.time() - start_time:.2f} seconds!")
-        
-    except Exception as e:
-        print(f"Pipeline error: {e}")
-        import traceback
-        traceback.print_exc()
+            # Simple extraction
+            result = extractor.extract_from_pdf(args.pdf_path)
+            
+            # Save form fields to Excel
+            if 'form_fields' in result:
+                df = pd.DataFrame([{"PDF Filename": Path(args.pdf_path).name, **result['form_fields']}])
+                df.to_excel(args.output, index=False)
+                print(f"Results saved to {args.output}")
+    
+    elif args.pdf_dir:
+        # Process multiple PDFs
+        extractor.process_multiple_pdfs(args.pdf_dir, args.output)
+    
+    else:
+        print("Please specify either --pdf_path or --pdf_dir")
 
 if __name__ == "__main__":
     main()
+
+# Example usage:
+"""
+# Install Docling first:
+# pip install docling
+
+# Process single PDF with detailed analysis:
+# python docling_extractor.py --pdf_path "sample.pdf" --analyze --output_dir "analysis_output"
+
+# Process single PDF for data extraction:
+# python docling_extractor.py --pdf_path "sample.pdf" --output "results.xlsx"
+
+# Process multiple PDFs:
+# python docling_extractor.py --pdf_dir "path/to/pdfs" --output "batch_results.xlsx"
+"""
