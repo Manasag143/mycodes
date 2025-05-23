@@ -235,13 +235,16 @@ PDF CONTEXT:
     def _parse_json_response(self, response_text: str) -> List[Dict[str, str]]:
         """Parse JSON response from LLM - handles multiple JSONs separated by semicolon"""
         try:
+            print(f"  Raw LLM Response: {response_text[:200]}...")  # Debug output
+            
             # First, check if response contains semicolon-separated JSONs
             if ';' in response_text and '{' in response_text:
+                print(f"  Detected potential multiple JSONs (found semicolon)")
                 # Split by semicolon and process each JSON
                 json_parts = response_text.split(';')
                 results = []
                 
-                for part in json_parts:
+                for i, part in enumerate(json_parts):
                     part = part.strip()
                     if '{' in part and '}' in part:
                         start_idx = part.find('{')
@@ -253,12 +256,16 @@ PDF CONTEXT:
                             # Ensure all expected keys are present
                             validated_result = self._validate_json_keys(result)
                             results.append(validated_result)
-                        except json.JSONDecodeError:
+                            print(f"  Successfully parsed JSON part {i+1}")
+                        except json.JSONDecodeError as e:
+                            print(f"  Failed to parse JSON part {i+1}: {e}")
                             continue  # Skip malformed JSON parts
                 
                 if results:
-                    print(f"  Found {len(results)} JSON objects in response")
+                    print(f"  Found {len(results)} valid JSON objects in response")
                     return results
+                else:
+                    print(f"  No valid JSONs found in semicolon-separated response")
             
             # Single JSON handling (original logic)
             start_idx = response_text.find('{')
@@ -268,6 +275,7 @@ PDF CONTEXT:
                 json_str = response_text[start_idx:end_idx]
                 result = json.loads(json_str)
                 validated_result = self._validate_json_keys(result)
+                print(f"  Found single JSON object")
                 return [validated_result]  # Return as list for consistency
             else:
                 print("No valid JSON found in response")
