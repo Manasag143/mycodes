@@ -6,6 +6,7 @@ import fitz  # PyMuPDF
 import requests
 import warnings
 from typing import Dict, List, Any
+import re
 
 # Suppress SSL warnings
 warnings.filterwarnings('ignore')
@@ -41,8 +42,66 @@ class StreamlinedKPIExtractor:
             "temperature": 0.1
         }
     
+    def extract_text_with_structure(self, page):
+        """Extract text with better structure preservation using text blocks"""
+        try:
+            # Get text blocks with coordinates
+            blocks = page.get_text("dict")
+            text_lines = []
+            
+            for block in blocks["blocks"]:
+                if "lines" in block:
+                    for line in block["lines"]:
+                        line_text = ""
+                        for span in line["spans"]:
+                            line_text += span["text"]
+                        if line_text.strip():
+                            text_lines.append({
+                                'text': line_text.strip(),
+                                'bbox': line["bbox"]
+                            })
+            
+            # Sort by y-coordinate (top to bottom), then x-coordinate (left to right)
+            text_lines.sort(key=lambda x: (x['bbox'][1], x['bbox'][0]))
+            
+            # Group lines that are at similar y-coordinates (same row)
+            grouped_lines = []
+            current_group = []
+            current_y = None
+            tolerance = 5  # pixels tolerance for same row
+            
+            for line in text_lines:
+                y_coord = line['bbox'][1]
+                if current_y is None or abs(y_coord - current_y) <= tolerance:
+                    current_group.append(line)
+                    current_y = y_coord if current_y is None else current_y
+                else:
+                    if current_group:
+                        # Sort current group by x-coordinate
+                        current_group.sort(key=lambda x: x['bbox'][0])
+                        grouped_lines.append(current_group)
+                    current_group = [line]
+                    current_y = y_coord
+            
+            # Add the last group
+            if current_group:
+                current_group.sort(key=lambda x: x['bbox'][0])
+                grouped_lines.append(current_group)
+            
+            # Join text from grouped lines
+            structured_text = ""
+            for group in grouped_lines:
+                line_text = " | ".join([item['text'] for item in group])
+                structured_text += line_text + "\n"
+            
+            return structured_text
+            
+        except Exception as e:
+            print(f"Error in structured extraction, falling back to basic: {e}")
+            return page.get_text()
+    
     def extract_key_pages(self, pdf_path: str) -> str:
-        """Extract text from page 1, page 10, and page 11 of PDF"""
+        """Extract text from page 1, page 10, and page 11 of PDF with better structure"""
         start_time = time.time()
         try:
             doc = fitz.open(pdf_path)
@@ -52,21 +111,31 @@ class StreamlinedKPIExtractor:
             if len(doc) >= 1:
                 page1 = doc[0]
                 context += "#### PAGE 1 ####\n"
-                context += page1.get_text()
+                context += self.extract_text_with_structure(page1)
                 context += "\n\n"
             
-            # Extract page 10 (if exists)
+            # Extract page 10 (if exists) up to Segment III
             if len(doc) >= 10:
                 page10 = doc[9]  # 0-indexed
                 context += "#### PAGE 10 ####\n"
-                context += page10.get_text()
+                page10_text = self.extract_text_with_structure(page10)
+                # Stop at Segment III if found
+                segment_iii_match = re.search(r'Segment\s+III', page10_text, re.IGNORECASE)
+                if segment_iii_match:
+                    page10_text = page10_text[:segment_iii_match.start()]
+                context += page10_text
                 context += "\n\n"
             
-            # Extract page 11 (if exists)
+            # Extract page 11 (if exists) up to Segment III
             if len(doc) >= 11:
                 page11 = doc[10]  # 0-indexed
                 context += "#### PAGE 11 ####\n"
-                context += page11.get_text()
+                page11_text = self.extract_text_with_structure(page11)
+                # Stop at Segment III if found
+                segment_iii_match = re.search(r'Segment\s+III', page11_text, re.IGNORECASE)
+                if segment_iii_match:
+                    page11_text = page11_text[:segment_iii_match.start()]
+                context += page11_text
             
             doc.close()
             print(f"PDF extraction took {time.time() - start_time:.2f} seconds")
@@ -84,7 +153,8 @@ class StreamlinedKPIExtractor:
 CRITICAL INSTRUCTIONS:
 - Extract ONLY the requested information
 - If any information is not found in the provided context, return "-" for that field
-- Return ONLY the JSON object, no additional text or explanations
+- If there are multiple product/service categories, create separate JSON objects for each category
+- Return an array of JSON objects if multiple categories exist, otherwise return a single JSON object
 - Do not add any commentary or notes
 - For codes, extract only the numeric digits
 - For CIN, extract the complete alphanumeric code
@@ -109,7 +179,33 @@ Extract the following 9 KPI values from the provided PDF context and return them
 8. Description of the product or service
 9. Turnover of highest contributing product or service (in Rupees)
 
-Return the response in this exact JSON format:
+If there are multiple product/service categories, return an array of JSON objects:
+[
+    {{
+        "cin": "value_or_-",
+        "financial_year": "value_or_-",
+        "company_name": "value_or_-",
+        "product_category_code": "value_or_-",
+        "product_category_description": "value_or_-",
+        "product_category_turnover": "value_or_-",
+        "highest_product_code": "value_or_-",
+        "highest_product_description": "value_or_-", 
+        "highest_product_turnover": "value_or_-"
+    }},
+    {{
+        "cin": "value_or_-",
+        "financial_year": "value_or_-",
+        "company_name": "value_or_-",
+        "product_category_code": "value_or_-",
+        "product_category_description": "value_or_-",
+        "product_category_turnover": "value_or_-",
+        "highest_product_code": "value_or_-",
+        "highest_product_description": "value_or_-", 
+        "highest_product_turnover": "value_or_-"
+    }}
+]
+
+If there's only one category, return a single JSON object:
 {{
     "cin": "value_or_-",
     "financial_year": "value_or_-",
@@ -129,8 +225,8 @@ PDF CONTEXT:
 
         return prompt
     
-    def call_llm_api(self, prompt: str) -> Dict[str, str]:
-        """Make single API call to extract all KPIs"""
+    def call_llm_api(self, prompt: str) -> List[Dict[str, str]]:
+        """Make single API call to extract all KPIs - returns list of results"""
         start_time = time.time()
         
         body = {
@@ -143,7 +239,7 @@ PDF CONTEXT:
             
             if response.status_code != 200:
                 print(f"API Error: Status {response.status_code}")
-                return self._get_empty_result()
+                return [self._get_empty_result()]
             
             response_json = response.json()
             if isinstance(response_json, list) and len(response_json) > 0:
@@ -154,19 +250,40 @@ PDF CONTEXT:
                 return self._parse_json_response(result_text)
             else:
                 print(f"Unexpected API response format")
-                return self._get_empty_result()
+                return [self._get_empty_result()]
                 
         except requests.exceptions.Timeout:
             print(f"API call timed out after {time.time() - start_time:.2f} seconds")
-            return self._get_empty_result()
+            return [self._get_empty_result()]
         except Exception as e:
             print(f"API call failed: {e}")
-            return self._get_empty_result()
+            return [self._get_empty_result()]
     
-    def _parse_json_response(self, response_text: str) -> Dict[str, str]:
-        """Parse JSON response from LLM"""
+    def _parse_json_response(self, response_text: str) -> List[Dict[str, str]]:
+        """Parse JSON response from LLM - handles both single objects and arrays"""
         try:
-            # Try to extract JSON from response
+            # Find JSON content in response
+            json_matches = []
+            
+            # First try to find array pattern
+            array_pattern = r'\[[\s\S]*?\]'
+            array_match = re.search(array_pattern, response_text)
+            
+            if array_match:
+                try:
+                    json_str = array_match.group(0)
+                    result = json.loads(json_str)
+                    if isinstance(result, list):
+                        # Validate and clean each object in the array
+                        cleaned_results = []
+                        for item in result:
+                            cleaned_item = self._validate_and_clean_result(item)
+                            cleaned_results.append(cleaned_item)
+                        return cleaned_results
+                except json.JSONDecodeError:
+                    pass
+            
+            # If no array found, look for single object
             start_idx = response_text.find('{')
             end_idx = response_text.rfind('}') + 1
             
@@ -174,26 +291,40 @@ PDF CONTEXT:
                 json_str = response_text[start_idx:end_idx]
                 result = json.loads(json_str)
                 
-                # Ensure all expected keys are present
-                expected_keys = [
-                    "cin", "financial_year", "company_name", "product_category_code",
-                    "product_category_description", "product_category_turnover",
-                    "highest_product_code", "highest_product_description", 
-                    "highest_product_turnover"
-                ]
-                
-                for key in expected_keys:
-                    if key not in result:
-                        result[key] = "-"
-                
-                return result
-            else:
-                print("No valid JSON found in response")
-                return self._get_empty_result()
+                if isinstance(result, dict):
+                    cleaned_result = self._validate_and_clean_result(result)
+                    return [cleaned_result]
+                elif isinstance(result, list):
+                    cleaned_results = []
+                    for item in result:
+                        cleaned_item = self._validate_and_clean_result(item)
+                        cleaned_results.append(cleaned_item)
+                    return cleaned_results
+            
+            print("No valid JSON found in response")
+            return [self._get_empty_result()]
                 
         except json.JSONDecodeError as e:
             print(f"JSON parsing error: {e}")
-            return self._get_empty_result()
+            return [self._get_empty_result()]
+    
+    def _validate_and_clean_result(self, result: Dict) -> Dict[str, str]:
+        """Validate and clean a single result object"""
+        expected_keys = [
+            "cin", "financial_year", "company_name", "product_category_code",
+            "product_category_description", "product_category_turnover",
+            "highest_product_code", "highest_product_description", 
+            "highest_product_turnover"
+        ]
+        
+        cleaned_result = {}
+        for key in expected_keys:
+            if key in result:
+                cleaned_result[key] = str(result[key]) if result[key] is not None else "-"
+            else:
+                cleaned_result[key] = "-"
+        
+        return cleaned_result
     
     def _get_empty_result(self) -> Dict[str, str]:
         """Return empty result with all fields set to '-'"""
@@ -209,8 +340,49 @@ PDF CONTEXT:
             "highest_product_turnover": "-"
         }
     
-    def process_single_pdf(self, pdf_path: str) -> Dict[str, str]:
-        """Process a single PDF and extract all 9 KPIs"""
+    def check_if_different_kpi_sets(self, results: List[Dict[str, str]]) -> List[List[Dict[str, str]]]:
+        """Group results by different KPI sets (last 6 fields)"""
+        if len(results) <= 1:
+            return [results]
+        
+        grouped_results = []
+        
+        for result in results:
+            # Extract last 6 KPI fields for comparison
+            kpi_signature = (
+                result["product_category_code"],
+                result["product_category_description"],
+                result["product_category_turnover"],
+                result["highest_product_code"],
+                result["highest_product_description"],
+                result["highest_product_turnover"]
+            )
+            
+            # Check if this signature already exists in any group
+            found_group = False
+            for group in grouped_results:
+                if group:  # Check if group is not empty
+                    existing_signature = (
+                        group[0]["product_category_code"],
+                        group[0]["product_category_description"],
+                        group[0]["product_category_turnover"],
+                        group[0]["highest_product_code"],
+                        group[0]["highest_product_description"],
+                        group[0]["highest_product_turnover"]
+                    )
+                    
+                    if kpi_signature == existing_signature:
+                        group.append(result)
+                        found_group = True
+                        break
+            
+            if not found_group:
+                grouped_results.append([result])
+        
+        return grouped_results
+    
+    def process_single_pdf(self, pdf_path: str) -> List[Dict[str, str]]:
+        """Process a single PDF and extract all 9 KPIs - returns list of results"""
         start_time = time.time()
         print(f"Processing PDF: {os.path.basename(pdf_path)}")
         
@@ -220,7 +392,7 @@ PDF CONTEXT:
             
             if not context.strip():
                 print("No content extracted from PDF")
-                return self._get_empty_result()
+                return [self._get_empty_result()]
             
             # Step 2: Create prompt with all 9 KPIs
             prompt = self.create_extraction_prompt(context)
@@ -229,11 +401,12 @@ PDF CONTEXT:
             results = self.call_llm_api(prompt)
             
             print(f"Total processing time: {time.time() - start_time:.2f} seconds")
+            print(f"Found {len(results)} result(s)")
             return results
             
         except Exception as e:
             print(f"Error processing PDF {pdf_path}: {e}")
-            return self._get_empty_result()
+            return [self._get_empty_result()]
     
     def process_pdf_directory(self, pdf_dir: str, output_excel: str):
         """Process all PDFs in directory and create Excel output with batch saving every 50 PDFs"""
@@ -277,26 +450,35 @@ PDF CONTEXT:
                 pdf_path = os.path.join(pdf_dir, pdf_file)
                 
                 try:
-                    # Extract KPIs
-                    kpi_results = self.process_single_pdf(pdf_path)
+                    # Extract KPIs - now returns list of results
+                    kpi_results_list = self.process_single_pdf(pdf_path)
                     
-                    # Create row for Excel
-                    row = {
-                        "PDF_Name": pdf_file,
-                        "Corporate_Identity_Number_CIN": kpi_results["cin"],
-                        "Financial_Year": kpi_results["financial_year"],
-                        "Company_Name": kpi_results["company_name"],
-                        "Product_Category_Code_4digit": kpi_results["product_category_code"],
-                        "Product_Category_Description": kpi_results["product_category_description"],
-                        "Product_Category_Turnover": kpi_results["product_category_turnover"],
-                        "Highest_Product_Code_8digit": kpi_results["highest_product_code"],
-                        "Highest_Product_Description": kpi_results["highest_product_description"],
-                        "Highest_Product_Turnover": kpi_results["highest_product_turnover"]
-                    }
+                    # Group results by different KPI sets
+                    grouped_results = self.check_if_different_kpi_sets(kpi_results_list)
                     
-                    batch_results.append(row)
-                    all_results.append(row)
-                    print(f"✓ Completed: {pdf_file}")
+                    # Create rows for Excel - one row per unique KPI set
+                    for group in grouped_results:
+                        if group:  # Check if group is not empty
+                            # Use the first result in group as representative
+                            kpi_results = group[0]
+                            
+                            row = {
+                                "PDF_Name": pdf_file,
+                                "Corporate_Identity_Number_CIN": kpi_results["cin"],
+                                "Financial_Year": kpi_results["financial_year"],
+                                "Company_Name": kpi_results["company_name"],
+                                "Product_Category_Code_4digit": kpi_results["product_category_code"],
+                                "Product_Category_Description": kpi_results["product_category_description"],
+                                "Product_Category_Turnover": kpi_results["product_category_turnover"],
+                                "Highest_Product_Code_8digit": kpi_results["highest_product_code"],
+                                "Highest_Product_Description": kpi_results["highest_product_description"],
+                                "Highest_Product_Turnover": kpi_results["highest_product_turnover"]
+                            }
+                            
+                            batch_results.append(row)
+                            all_results.append(row)
+                    
+                    print(f"✓ Completed: {pdf_file} ({len(grouped_results)} unique KPI set(s))")
                     
                 except Exception as e:
                     print(f"✗ Error processing {pdf_file}: {e}")
@@ -331,21 +513,23 @@ PDF CONTEXT:
                 
                 batch_time = time.time() - batch_start_time
                 print(f"\n📊 BATCH {batch_num} COMPLETED:")
-                print(f"   ✓ Processed: {len(batch_results)} PDFs")
+                print(f"   ✓ Processed: {len(batch_files)} PDFs")
+                print(f"   ✓ Generated: {len(batch_results)} rows")
                 print(f"   ✓ Time taken: {batch_time:.2f} seconds")
                 print(f"   ✓ Batch saved: {batch_filename}")
                 print(f"   ✓ Main file updated: {output_excel}")
-                print(f"   ✓ Total processed so far: {len(all_results)} PDFs")
+                print(f"   ✓ Total rows so far: {len(all_results)}")
         
-        # Final summary (no need to create another file as main file is already updated)
+        # Final summary
         if all_results:
             total_time = time.time() - start_time
             print(f"\n" + "="*60)
             print("🎉 ALL PROCESSING COMPLETED!")
             print("="*60)
-            print(f"✓ Total PDFs processed: {len(all_results)}")
+            print(f"✓ Total PDFs processed: {len(pdf_files)}")
+            print(f"✓ Total rows generated: {len(all_results)}")
             print(f"✓ Total time taken: {total_time:.2f} seconds")
-            print(f"✓ Average time per PDF: {total_time/len(all_results):.2f} seconds")
+            print(f"✓ Average time per PDF: {total_time/len(pdf_files):.2f} seconds")
             print(f"✓ Final results saved: {output_excel}")
             print(f"✓ Individual batch files: {(len(pdf_files) + batch_size - 1) // batch_size}")
             print("="*60)
