@@ -142,3 +142,48 @@ def generate_query(self, query: str, dimensions: str, measures: str, prev_conv: 
     except Exception as e:
         logging.error(f"Error generating OLAP query: {e}")
         raise
+
+
+
+
+
+class FinalQueryGenerator(LLMConfigure):
+    def __init__(self, query, dimensions: None, measures: None, llm: None):
+        super().__init__()
+        self.query = query
+        self.dimensions = dimensions
+        self.measures = measures
+        self.llm = llm
+        
+        # NEW: Add functions library
+        self.functions_library = self._load_functions_library()
+    
+    def _load_functions_library(self):
+        """Load structured functions instead of hardcoded text"""
+        return {
+            "time_functions": {
+                "TimeBetween": {
+                    "syntax": "TimeBetween(start_date, end_date, time_level, include_end)",
+                    "example": "TimeBetween(20120101,20171231,[Time].[Year], false)",
+                    "keywords": ["between", "range", "from", "to", "during", "date"]
+                },
+                "TRENDNUMBER": {
+                    "syntax": "TRENDNUMBER(measure, time_level, periods, trend_type)",
+                    "example": "TRENDNUMBER([Measures.PROFIT], [Calendar.Year], 2, 'percentage')",
+                    "keywords": ["trend", "change", "growth", "yoy", "mom", "previous", "compare"]
+                }
+            },
+            "ranking_functions": {
+                "Head": {
+                    "syntax": "Head(dimension, measure, count, undefined)",
+                    "example": "Head([Branch Details].[City], [Business Drivers].[Balance Amount], 5, undefined)",
+                    "keywords": ["top", "best", "highest", "first", "maximum"]
+                },
+                "Tail": {
+                    "syntax": "Tail(dimension, measure, count, undefined)", 
+                    "example": "Tail([Time].[Year], [Financial Data].[Total Revenue], 4, undefined)",
+                    "keywords": ["bottom", "worst", "lowest", "last", "minimum"]
+                }
+            },
+            # ... more categories
+        }
