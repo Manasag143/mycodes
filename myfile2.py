@@ -17,47 +17,11 @@ class SmartFunctionsManager:
             with open(self.functions_file, 'r', encoding='utf-8') as f:
                 return yaml.safe_load(f)
         except FileNotFoundError:
-            logging.warning(f"Functions file {self.functions_file} not found. Using default functions.")
-            return self._get_default_functions()
+            logging.error(f"❌ Functions file {self.functions_file} not found! Please create the YAML file.")
+            raise FileNotFoundError(f"Required file {self.functions_file} is missing. Please create it.")
         except Exception as e:
-            logging.error(f"Error loading functions file: {e}")
-            return self._get_default_functions()
-    
-    def _get_default_functions(self) -> Dict:
-        """Fallback default functions if YAML file not available"""
-        return {
-            "time_functions": {
-                "TimeBetween": {
-                    "syntax": "TimeBetween(start_date, end_date, time_level, include_end)",
-                    "example": "TimeBetween(20120101,20171231,[Time].[Year], false)",
-                    "keywords": ["between", "range", "from", "to", "during", "date"]
-                },
-                "TRENDNUMBER": {
-                    "syntax": "TRENDNUMBER(measure, time_level, periods, trend_type)",
-                    "example": "TRENDNUMBER([Measures.PROFIT], [Calendar.Year], 2, 'percentage')",
-                    "keywords": ["trend", "change", "growth", "yoy", "mom", "previous"]
-                }
-            },
-            "ranking_functions": {
-                "Head": {
-                    "syntax": "Head(dimension, measure, count, undefined)",
-                    "example": "Head([Branch Details].[City], [Business Drivers].[Balance Amount], 5, undefined)",
-                    "keywords": ["top", "best", "highest", "first", "maximum"]
-                },
-                "Tail": {
-                    "syntax": "Tail(dimension, measure, count, undefined)",
-                    "example": "Tail([Time].[Year], [Financial Data].[Total Revenue], 4, undefined)",
-                    "keywords": ["bottom", "worst", "lowest", "last", "minimum"]
-                }
-            },
-            "utility_functions": {
-                "ROUND": {
-                    "syntax": "ROUND(kpi, decimal_places)",
-                    "example": "ROUND([Measures.PROFIT], 3)",
-                    "keywords": ["round", "decimal", "precision"]
-                }
-            }
-        }
+            logging.error(f"❌ Error loading functions file: {e}")
+            raise
     
     def _analyze_query_intent(self, query: str) -> List[str]:
         """Analyze query to determine which function categories are needed"""
