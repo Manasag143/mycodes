@@ -1,10 +1,5 @@
 # ============================================================================
-# 1. ADD NEW IMPORT AT THE TOP
-# ============================================================================
-import yaml  # ADD this line with your other imports
-
-# ============================================================================
-# 2. ADD NEW CLASS AFTER YOUR EXISTING CLASSES
+# COMPLETE SMARTFUNCTIONSMANAGER CLASS (with all methods)
 # ============================================================================
 
 class SmartFunctionsManager:
@@ -36,6 +31,11 @@ class SmartFunctionsManager:
                     "syntax": "TimeBetween(start_date, end_date, time_level, include_end)",
                     "example": "TimeBetween(20120101,20171231,[Time].[Year], false)",
                     "keywords": ["between", "range", "from", "to", "during", "date"]
+                },
+                "TRENDNUMBER": {
+                    "syntax": "TRENDNUMBER(measure, time_level, periods, trend_type)",
+                    "example": "TRENDNUMBER([Measures.PROFIT], [Calendar.Year], 2, 'percentage')",
+                    "keywords": ["trend", "change", "growth", "yoy", "mom", "previous"]
                 }
             },
             "ranking_functions": {
@@ -43,6 +43,18 @@ class SmartFunctionsManager:
                     "syntax": "Head(dimension, measure, count, undefined)",
                     "example": "Head([Branch Details].[City], [Business Drivers].[Balance Amount], 5, undefined)",
                     "keywords": ["top", "best", "highest", "first", "maximum"]
+                },
+                "Tail": {
+                    "syntax": "Tail(dimension, measure, count, undefined)",
+                    "example": "Tail([Time].[Year], [Financial Data].[Total Revenue], 4, undefined)",
+                    "keywords": ["bottom", "worst", "lowest", "last", "minimum"]
+                }
+            },
+            "utility_functions": {
+                "ROUND": {
+                    "syntax": "ROUND(kpi, decimal_places)",
+                    "example": "ROUND([Measures.PROFIT], 3)",
+                    "keywords": ["round", "decimal", "precision"]
                 }
             }
         }
@@ -77,7 +89,7 @@ class SmartFunctionsManager:
             needed_categories.append("aggregation_functions")
         
         # Check for comparison queries
-        comp_keywords = ["between", "in", "like", "contains", "not", "equals"]
+        comp_keywords = ["in", "like", "contains", "not"]
         if any(keyword in query_lower for keyword in comp_keywords):
             needed_categories.append("comparison_functions")
         
@@ -95,6 +107,7 @@ class SmartFunctionsManager:
         
         return needed_categories
     
+    # THIS IS THE MISSING METHOD!
     def build_dynamic_functions_section(self, query: str) -> str:
         """Build functions section with only relevant functions"""
         needed_categories = self._analyze_query_intent(query)
@@ -120,32 +133,14 @@ class SmartFunctionsManager:
         # Log optimization metrics
         total_functions = sum(len(funcs) for funcs in self.functions_library.values())
         selected_functions = sum(len(self.functions_library[cat]) for cat in needed_categories if cat in self.functions_library)
+        
+        print(f"Function optimization: Using {selected_functions}/{total_functions} functions ({(selected_functions/total_functions)*100:.1f}%)")
         logging.info(f"Function optimization: Using {selected_functions}/{total_functions} functions ({(selected_functions/total_functions)*100:.1f}%)")
         
         return functions_text
 
 # ============================================================================
-# 3. MODIFY YOUR FinalQueryGenerator CLASS
-# ============================================================================
-
-# ADD this to your FinalQueryGenerator __init__ method:
-def __init__(self, query, dimensions: None, measures: None, llm: None):
-    super().__init__()
-    self.query = query
-    self.dimensions = dimensions
-    self.measures = measures
-    self.llm = llm
-    self.prev_query = []
-    self.prev_dimension = []
-    self.prev_measures = []
-    self.prev_response = []
-    self.max_history = 6
-    
-    # ADD THIS LINE:
-    self.functions_manager = SmartFunctionsManager()
-
-# ============================================================================
-# 4. REPLACE YOUR generate_query METHOD WITH THIS OPTIMIZED VERSION
+# CORRECTED generate_query METHOD
 # ============================================================================
 
 def generate_query(self, query: str, dimensions: str, measures: str, prev_conv: dict, cube_name: str) -> str:
@@ -156,7 +151,7 @@ def generate_query(self, query: str, dimensions: str, measures: str, prev_conv: 
         if not dimensions or not measures:
             raise ValueError("Both dimensions and measures are required to generate a query.")
             
-        # NEW: Get dynamic functions section based on query analysis
+        # CORRECTED: Get dynamic functions section based on query analysis
         dynamic_functions = self.functions_manager.build_dynamic_functions_section(query)
         
         # Load sample queries (existing code)
@@ -217,12 +212,12 @@ def generate_query(self, query: str, dimensions: str, measures: str, prev_conv: 
         # Generate query
         result = self.llm.invoke(final_prompt)
         output = result.content
-        token_details = result.response_metadata['token_usage']
+        token_details = result.response_metadata.get('token_usage', {})
         pred_query = self.cleanup_gen_query(output)
         
         # Log optimization results
         selected_categories = self.functions_manager._analyze_query_intent(query)
-        print(f"Function optimization: Used {len(selected_categories)} function categories for this query")
+        print(f"Selected function categories: {selected_categories}")
         print(f"Generated Query: {pred_query}")
         
         logging.info(f"Generated OLAP Query with {token_details.get('total_tokens', 'unknown')} tokens: {pred_query}")
@@ -231,9 +226,3 @@ def generate_query(self, query: str, dimensions: str, measures: str, prev_conv: 
     except Exception as e:
         logging.error(f"Error generating OLAP query: {e}")
         raise
-
-# ============================================================================
-# 5. ADD REQUIREMENTS TO YOUR PROJECT
-# ============================================================================
-# Add this to your requirements.txt or install manually:
-# PyYAML>=6.0
