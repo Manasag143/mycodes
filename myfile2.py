@@ -1,417 +1,239 @@
-time_functions:
-  TimeBetween:
-    syntax: TimeBetween(start_date, end_date, time_level, include_end)
-    example: TimeBetween(20120101,20171231,[Time].[Year], false)
-    keywords: 
-      - between
-      - range
-      - from
-      - to
-      - during
-      - date
-      - year
-      - month
-      - day
-      - period
-    description: Filter data within specific date ranges
-    use_case: Use when query mentions date ranges, time periods, or 'between' dates
+# ============================================================================
+# 1. ADD NEW IMPORT AT THE TOP
+# ============================================================================
+import yaml  # ADD this line with your other imports
 
-  TRENDNUMBER:
-    syntax: TRENDNUMBER(measure, time_level, periods, trend_type)
-    example: TRENDNUMBER([Measures.PROFIT], [Calendar.Year], 2, 'percentage')
-    keywords:
-      - trend
-      - change
-      - growth
-      - yoy
-      - mom
-      - previous
-      - next
-      - compare
-      - lag
-      - lead
-      - "%"
-      - percentage
-    description: Calculate trends and comparisons across time periods
-    use_case: Use for year-over-year, month-over-month, or any period comparisons
-    options:
-      - average
-      - value
-      - percentage
-      - sum
-      - delta
-    notes: "trend_type options: 'average'=avg of previous periods, 'value'=value of previous period, 'percentage'=% change, 'sum'=sum of previous periods, 'delta'=change in value"
+# ============================================================================
+# 2. ADD NEW CLASS AFTER YOUR EXISTING CLASSES
+# ============================================================================
 
-  PERIODSTODATE:
-    syntax: PERIODSTODATE(time_dimension_level, measure, period_type)
-    example: PERIODSTODATE([Calendar.FiYear], [Measures.PROFIT], 'avg')
-    keywords:
-      - ytd
-      - mtd
-      - qtd
-      - year to date
-      - month to date
-      - quarter to date
-      - cumulative
-    description: Calculate Year-to-Date, Month-to-Date, Quarter-to-Date values
-    use_case: Use when query asks for cumulative values up to current period
-    options:
-      - avg
-      - sum
-    notes: "period_type: 'sum' for total accumulation, 'avg' for average accumulation"
+class SmartFunctionsManager:
+    """
+    Manages OLAP functions with smart selection based on query analysis
+    """
+    
+    def __init__(self, functions_file: str = "olap_functions.yaml"):
+        self.functions_file = functions_file
+        self.functions_library = self._load_functions_library()
+        
+    def _load_functions_library(self) -> Dict:
+        """Load functions from YAML file"""
+        try:
+            with open(self.functions_file, 'r', encoding='utf-8') as f:
+                return yaml.safe_load(f)
+        except FileNotFoundError:
+            logging.warning(f"Functions file {self.functions_file} not found. Using default functions.")
+            return self._get_default_functions()
+        except Exception as e:
+            logging.error(f"Error loading functions file: {e}")
+            return self._get_default_functions()
+    
+    def _get_default_functions(self) -> Dict:
+        """Fallback default functions if YAML file not available"""
+        return {
+            "time_functions": {
+                "TimeBetween": {
+                    "syntax": "TimeBetween(start_date, end_date, time_level, include_end)",
+                    "example": "TimeBetween(20120101,20171231,[Time].[Year], false)",
+                    "keywords": ["between", "range", "from", "to", "during", "date"]
+                }
+            },
+            "ranking_functions": {
+                "Head": {
+                    "syntax": "Head(dimension, measure, count, undefined)",
+                    "example": "Head([Branch Details].[City], [Business Drivers].[Balance Amount], 5, undefined)",
+                    "keywords": ["top", "best", "highest", "first", "maximum"]
+                }
+            }
+        }
+    
+    def _analyze_query_intent(self, query: str) -> List[str]:
+        """Analyze query to determine which function categories are needed"""
+        query_lower = query.lower()
+        needed_categories = []
+        
+        # Check for time-related queries
+        time_keywords = ["between", "range", "from", "to", "year", "month", "date", 
+                         "yoy", "mom", "trend", "previous", "next", "change", "growth"]
+        if any(keyword in query_lower for keyword in time_keywords):
+            needed_categories.append("time_functions")
+        
+        # Check for ranking queries  
+        ranking_keywords = ["top", "bottom", "best", "worst", "highest", "lowest", 
+                           "first", "last", "rank", "maximum", "minimum"]
+        if any(keyword in query_lower for keyword in ranking_keywords):
+            needed_categories.append("ranking_functions")
+        
+        # Check for conditional queries
+        conditional_keywords = ["where", "if", "when", "only", "filter", "exclude", 
+                               "condition", "greater", "less", "equal"]
+        if any(keyword in query_lower for keyword in conditional_keywords):
+            needed_categories.append("conditional_functions")
+        
+        # Check for aggregation queries
+        agg_keywords = ["sum", "total", "average", "count", "percentage", "%", 
+                       "cumulative", "running"]
+        if any(keyword in query_lower for keyword in agg_keywords):
+            needed_categories.append("aggregation_functions")
+        
+        # Check for comparison queries
+        comp_keywords = ["between", "in", "like", "contains", "not", "equals"]
+        if any(keyword in query_lower for keyword in comp_keywords):
+            needed_categories.append("comparison_functions")
+        
+        # Check for mathematical operations
+        math_keywords = ["greater", "less", "above", "below", "more", "exceeds"]
+        if any(keyword in query_lower for keyword in math_keywords):
+            needed_categories.append("mathematical_operations")
+        
+        # Always include utility functions (small category)
+        needed_categories.append("utility_functions")
+        
+        # If no specific functions detected, include all (fallback)
+        if len(needed_categories) == 1:  # Only utility
+            needed_categories = list(self.functions_library.keys())
+        
+        return needed_categories
+    
+    def build_dynamic_functions_section(self, query: str) -> str:
+        """Build functions section with only relevant functions"""
+        needed_categories = self._analyze_query_intent(query)
+        functions_text = "<functions>\n"
+        
+        for category in needed_categories:
+            if category in self.functions_library:
+                category_funcs = self.functions_library[category]
+                
+                # Add category header
+                category_name = category.replace("_", " ").title()
+                functions_text += f"\n## {category_name}:\n"
+                
+                # Add each function in this category
+                for func_name, func_info in category_funcs.items():
+                    functions_text += f"- {func_name}: {func_info['syntax']}\n"
+                    functions_text += f"  Example: {func_info['example']}\n"
+                    if 'use_case' in func_info:
+                        functions_text += f"  Use: {func_info['use_case']}\n"
+        
+        functions_text += "</functions>"
+        
+        # Log optimization metrics
+        total_functions = sum(len(funcs) for funcs in self.functions_library.values())
+        selected_functions = sum(len(self.functions_library[cat]) for cat in needed_categories if cat in self.functions_library)
+        logging.info(f"Function optimization: Using {selected_functions}/{total_functions} functions ({(selected_functions/total_functions)*100:.1f}%)")
+        
+        return functions_text
 
-  EOP:
-    syntax: EOP(kpi, time_dimension_level)
-    example: EOP([Measures.# of Employees], [Calendar.Year])
-    keywords:
-      - end of period
-      - eop
-      - closing
-      - final
-      - last day
-      - period end
-    description: Calculate End of Period values (end of year, month, etc.)
-    use_case: Use when you need the final value at the end of a time period
+# ============================================================================
+# 3. MODIFY YOUR FinalQueryGenerator CLASS
+# ============================================================================
 
-ranking_functions:
-  Head:
-    syntax: "Head(dimension, measure, count, undefined)"
-    example: "Head([Branch Details].[City], [Business Drivers].[Balance Amount], 5, undefined)"
-    keywords:
-      - top
-      - best
-      - highest
-      - first
-      - maximum
-      - max
-      - greatest
-      - largest
-      - leading
-    description: "Get top N results based on a measure"
-    use_case: "Use when query asks for 'top X', 'best X', 'highest X' items"
+# ADD this to your FinalQueryGenerator __init__ method:
+def __init__(self, query, dimensions: None, measures: None, llm: None):
+    super().__init__()
+    self.query = query
+    self.dimensions = dimensions
+    self.measures = measures
+    self.llm = llm
+    self.prev_query = []
+    self.prev_dimension = []
+    self.prev_measures = []
+    self.prev_response = []
+    self.max_history = 6
+    
+    # ADD THIS LINE:
+    self.functions_manager = SmartFunctionsManager()
 
-  Tail:
-    syntax: "Tail(dimension, measure, count, undefined)"
-    example: "Tail([Time].[Year], [Financial Data].[Total Revenue], 4, undefined)"
-    keywords:
-      - bottom
-      - worst
-      - lowest
-      - last
-      - minimum
-      - min
-      - smallest
-      - least
-    description: "Get bottom N results based on a measure"
-    use_case: "Use when query asks for 'bottom X', 'worst X', 'lowest X' items"
+# ============================================================================
+# 4. REPLACE YOUR generate_query METHOD WITH THIS OPTIMIZED VERSION
+# ============================================================================
 
-  rank:
-    syntax: "rank(dimension_level, 'rankAcrossRows')"
-    example: "rank([Branch Details].[City], 'rankAcrossRows')"
-    keywords:
-      - rank
-      - ranking
-      - position
-      - order
-      - sequence
-    description: "Provide ranking numbers for values"
-    use_case: "Use when query asks for rankings or positions of items"
+def generate_query(self, query: str, dimensions: str, measures: str, prev_conv: dict, cube_name: str) -> str:
+    """
+    Optimized query generation with smart function selection
+    """
+    try:
+        if not dimensions or not measures:
+            raise ValueError("Both dimensions and measures are required to generate a query.")
+            
+        # NEW: Get dynamic functions section based on query analysis
+        dynamic_functions = self.functions_manager.build_dynamic_functions_section(query)
+        
+        # Load sample queries (existing code)
+        sample_queries = self.load_sample_queries(cube_id=cube_name)
+        sample_query_examples = ""
+        if sample_queries and len(sample_queries) > 0:
+            sample_query_examples = "\n<sample_queries_for_this_cube>\n"
+            # Limit to first 5 examples for efficiency
+            for idx, sq in enumerate(sample_queries[:5], 1):
+                sample_query_examples += f"user query:{sq['user_query']}\n"
+                sample_query_examples += f"Expected Response:-{sq['cube_query']}\n\n"
+            sample_query_examples += "</sample_queries_for_this_cube>\n"
+        
+        # UPDATED: Optimized prompt with dynamic function selection
+        final_prompt = f"""You are an expert in generating SQL Cube query. You will be provided dimensions delimited by $$$$ and measures delimited by &&&&.
+        Your Goal is to generate a precise single line cube query for the user query delimited by ####.
 
-conditional_functions:
-  IF:
-    syntax: "IF(condition, TRUE_statement, FALSE_statement)"
-    example: "IF([Measures.Brokerage] = 0 or [Measures.Brokerage] = null, null, [Measures.Total Cost] / [Measures.Brokerage])"
-    keywords:
-      - if
-      - when
-      - condition
-      - then
-      - else
-      - case
-      - conditional
-    description: "Conditional IF-ELSE calculations on measures"
-    use_case: "Use when calculations depend on conditions or when handling null/zero values"
+        Instructions:            
+        - Generate a single-line Cube query without line breaks
+        - Include 'as' aliases for all level names in double quotes. alias are always level names.
+        - Choose the most appropriate dimensions group names and level from dimensions delimited by $$$$ according to the query.
+        - Choose the most appropriate measures group names and level from measures delimited by &&&& according to the query.
+        - check the examples to learn about correct syntax, functions and filters which can be used according to the user query requirement.
+        - User Query could be a follow up query in a conversation, you will also be provided previous query, dimensions, measures, cube query. Generate the final query including the contexts from conversation as appropriate.
 
-  ISPRESENT:
-    syntax: "ISPRESENT(Level_Name)"
-    example: "IF(ISPRESENT([Branch.Zone]), [Measures.PROFIT], 0)"
-    keywords:
-      - present
-      - exists
-      - available
-      - has
-      - contains
-    description: "Check whether a level is present in the report"
-    use_case: "Use as condition in IF functions to check if a dimension level exists in the current context"
+        Formatting Rules:
+        - Dimensions format: [Dimension Group Name].[Dimension Level Name] as "Dimension Level Name"
+        - Measures format: [Measure Group Name].[Measure Level Name] as "Measure Level Name"
+        - Conditions in WHERE clause must be properly formatted with operators
+        - For multiple conditions, use "and" "or" operators
+        - All string values in conditions must be in single quotes
+        - All numeric values should not have leading zeros
 
-  FILTERKPI:
-    syntax: "FILTERKPI(kpi, condition)"
-    example: "FILTERKPI([Measures.PROFIT], [Branch Type.Status] = 'ACTIVE')"
-    keywords:
-      - filter
-      - where
-      - condition
-      - only
-      - exclude
-      - conditional sum
-      - conditional average
-    description: "Conditional aggregation of measures with filters"
-    use_case: "Use for conditional sum, conditional average, or filtered aggregations"
+        {dynamic_functions}
 
-aggregation_functions:
-  SUM:
-    syntax: "SUM(dimension_level, scope, kpi, dimension_level)"
-    example: "SUM([Customer.Customer Code], 'specific', [Measures.Exposure], [Account.Account Number])"
-    keywords:
-      - sum
-      - total
-      - aggregate
-      - add
-    description: "Custom aggregation at specific levels"
-    use_case: "Use for custom sum calculations at particular dimension levels"
-    scopes:
-      - specific
-      - current
-      - all
-    notes: "'specific'=aggregate at specified level, 'current'=current context, 'all'=all levels"
+        {sample_query_examples}
 
-  MIN:
-    syntax: "MIN(dimension_level, scope, kpi, dimension_level)"
-    example: "MIN([Customer.Customer Code], 'specific', [Measures.Balance], [Account.Account Number])"
-    keywords:
-      - min
-      - minimum
-      - smallest
-      - least
-    description: "Find minimum values at specific levels"
-    use_case: "Use to find minimum values across dimensions"
-    scopes:
-      - "specific"
-      - "current"
-      - "all"
+        <final_review>
+        - ensure if the query has been generated with dimensions and measures extracted only from the current and previous conversation
+        - check if functions and filters have been used appropriately in the final cube query, ensure generated query contains filters and functions from given supported functions only
+        - review the syntax of the final cube query, refer the examples to help with the review for syntax check, functions and filters usage
+        </final_review>
 
-  MAX:
-    syntax: "MAX(dimension_level, scope, kpi, dimension_level)"
-    example: "MAX([Customer.Customer Code], 'specific', [Measures.Balance], [Account.Account Number])"
-    keywords:
-      - max
-      - maximum
-      - largest
-      - greatest
-    description: "Find maximum values at specific levels"
-    use_case: "Use to find maximum values across dimensions"
-    scopes:
-      - "specific"
-      - "current"
-      - "all"
+        User Query: ####{query}####
+        
+        $$$$
+        Dimensions: {dimensions}
+        $$$$
 
-  COUNT:
-    syntax: "COUNT(dimension_level, scope, kpi, dimension_level)"
-    example: "COUNT([Customer.Customer Code], 'specific', [Measures.Transactions], [Account.Account Number])"
-    keywords:
-      - count
-      - number
-      - quantity
-      - total number
-    description: "Count items at specific levels"
-    use_case: "Use to count occurrences or items"
-    scopes:
-      - "specific"
-      - "current"
-      - "all"
+        &&&&
+        Measures: {measures}
+        &&&&
 
-  AVG:
-    syntax: "AVG(dimension_level, scope, kpi, dimension_level)"
-    example: "AVG([Customer.Customer Code], 'specific', [Measures.Balance], [Account.Account Number])"
-    keywords:
-      - avg
-      - average
-      - mean
-    description: "Calculate average values at specific levels"
-    use_case: "Use to calculate averages across dimensions"
-    scopes:
-      - "specific"
-      - "current"
-      - "all"
+        Generate a precise single-line Cube query that exactly matches these requirements:"""
 
-  percentage:
-    syntax: "percentage(measure, 'percentColumn')"
-    example: "percentage([Business Drivers].[Balance Amount], 'percentColumn')"
-    keywords:
-      - percentage
-      - percent
-      - "%"
-      - proportion
-      - ratio
-    description: "Calculate percentage values"
-    use_case: "Use when query asks for percentages or proportions"
+        print(Fore.CYAN + '   Generating optimized OLAP cube Query......................\n')
+        
+        # Generate query
+        result = self.llm.invoke(final_prompt)
+        output = result.content
+        token_details = result.response_metadata['token_usage']
+        pred_query = self.cleanup_gen_query(output)
+        
+        # Log optimization results
+        selected_categories = self.functions_manager._analyze_query_intent(query)
+        print(f"Function optimization: Used {len(selected_categories)} function categories for this query")
+        print(f"Generated Query: {pred_query}")
+        
+        logging.info(f"Generated OLAP Query with {token_details.get('total_tokens', 'unknown')} tokens: {pred_query}")
+        return pred_query
+    
+    except Exception as e:
+        logging.error(f"Error generating OLAP query: {e}")
+        raise
 
-  runningsum:
-    syntax: "runningsum(measure, 'sumacrossrows')"
-    example: "runningsum([Business Drivers].[Balance Amount], 'sumacrossrows')"
-    keywords:
-      - running sum
-      - cumulative
-      - accumulative
-      - progressive total
-    description: "Calculate cumulative running totals"
-    use_case: "Use for running totals or cumulative calculations"
-
-  percentageofrunningsum:
-    syntax: "percentageofrunningsum(measure, 'percentagerunningsumacrossrows')"
-    example: "percentageofrunningsum([Business Drivers].[Balance Amount], 'percentagerunningsumacrossrows')"
-    keywords:
-      - percentage of running sum
-      - cumulative percentage
-      - running percentage
-    description: "Calculate percentage of running sum"
-    use_case: "Use for cumulative percentage calculations"
-
-utility_functions:
-  ROUND:
-    syntax: ROUND(kpi, decimal_places)
-    example: ROUND([Measures.PROFIT], 3)
-    keywords:
-      - round
-      - decimal
-      - precision
-    description: Round numbers to specified decimal places
-    use_case: Use to format numerical results with specific precision
-
-  COALESCE:
-    syntax: COALESCE(kpi, default_value)
-    example: COALESCE([Measures.PROFIT], 0)
-    keywords:
-      - coalesce
-      - null
-      - default
-      - fallback
-    description: Handle null values by providing default values
-    use_case: Use to replace null values with meaningful defaults
-
-comparison_functions:
-  between:
-    syntax: measure between value1 and value2
-    example: "[Business Drivers].[Balance Amount Average] between 400000000.00 and 2000000000.00"
-    keywords:
-      - between
-      - range
-      - within
-    description: Filter values within a specific range
-    use_case: Use when filtering numerical values within min-max ranges
-
-  not_between:
-    syntax: measure not between value1 and value2
-    example: "[Business Drivers].[Balance Amount Average] not between 400000000.00 and 2000000000.00"
-    keywords:
-      - not between
-      - outside range
-      - excluding
-    description: Filter values outside a specific range
-    use_case: Use when excluding values within a range
-
-  in:
-    syntax: dimension in ('value1','value2','value3')
-    example: "[Mutual Fund Investment].[Mutual Fund Name] in ('AXIS','HDFC','ICICI','LIC')"
-    keywords:
-      - in
-      - among
-      - one of
-    description: Filter for specific values from a list
-    use_case: Use when filtering for specific items from a predefined list
-
-  like:
-    syntax: dimension like 'pattern'
-    example: "[Benchmark Index Details].[Index Name] like '%Nifty%'"
-    keywords:
-      - like
-      - contains
-      - similar
-      - pattern
-    description: Pattern matching for text values
-    use_case: Use for text pattern matching or partial string searches
-
-  not_like:
-    syntax: dimension not like 'pattern'
-    example: "[Benchmark Index Details].[Index Name] not like '%Nifty%'"
-    keywords:
-      - not like
-      - does not contain
-      - excluding pattern
-    description: Exclude values matching a pattern
-    use_case: Use to exclude items that match a text pattern
-
-mathematical_operations:
-  greater_than:
-    syntax: measure > value
-    example: "[Business Drivers].[Balance Amount] > 0.00"
-    keywords:
-      - greater than
-      - more than
-      - above
-      - exceeds
-    description: Filter values greater than a threshold
-    use_case: Use when filtering for values above a certain limit
-
-  less_than:
-    syntax: measure < value
-    example: "[Bulk Deal Trade].[Trade Price] < 276.00"
-    keywords:
-      - less than
-      - below
-      - under
-      - smaller
-    description: Filter values less than a threshold
-    use_case: Use when filtering for values below a certain limit
-
-  greater_equal:
-    syntax: measure >= value
-    example: "[Business Drivers].[Count of Customers] >= 10.00"
-    keywords:
-      - greater than or equal
-      - at least
-      - minimum
-    description: Filter values greater than or equal to a threshold
-    use_case: Use when setting minimum value requirements
-
-  less_equal:
-    syntax: measure <= value
-    example: "[Business Drivers].[Balance Amount] <= 1000000.00"
-    keywords:
-      - less than or equal
-      - at most
-      - maximum
-    description: Filter values less than or equal to a threshold
-    use_case: Use when setting maximum value limits
-
-  equals:
-    syntax: dimension = 'value' or measure = value
-    example: "[Customer Details].[EWS Tag] = 'HIGH' and [Time].[Day] = '2025-01-15'"
-    keywords:
-      - equals
-      - is
-      - equal to
-    description: Filter for exact value matches
-    use_case: Use when filtering for exact values
-
-logical_operators:
-  and:
-    syntax: condition1 and condition2
-    example: "[Business Drivers].[Count of Customers] > 10.00 and [Business Drivers].[Balance Amount Average] > 5000.00"
-    keywords:
-      - and
-      - also
-      - both
-      - additionally
-    description: Combine multiple conditions (all must be true)
-    use_case: Use when all conditions must be satisfied
-
-  or:
-    syntax: condition1 or condition2
-    example: "[Measures.Brokerage] = 0 or [Measures.Brokerage] = null"
-    keywords:
-      - or
-      - either
-      - alternatively
-    description: Combine multiple conditions (any can be true)
-    use_case: Use when any of the conditions can be satisfied
+# ============================================================================
+# 5. ADD REQUIREMENTS TO YOUR PROJECT
+# ============================================================================
+# Add this to your requirements.txt or install manually:
+# PyYAML>=6.0
