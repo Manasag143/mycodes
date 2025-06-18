@@ -93,4 +93,29 @@ async def handle_user_feedback(request: UserFeedbackRequest, user_details: str =
         )
 
 
-
+@app.post("/genai/cube_error_injection", response_model=CubeErrorResponse)
+async def handle_cube_error(request: CubeErrorRequest, user_details: str = Depends(verify_token)):
+    try:
+        # ... your existing code ...
+        
+        # Add these logs before return:
+        logging.info(f"API_HIT - User: {user_details}, Cube: {request.cube_id}, Endpoint: cube_error_injection")
+        logging.info(f"LLM_RESPONDED - Success: True, Processing_time: {processing_time}")
+        logging.info(f"DIMENSIONS_MEASURES - Dimensions: {dimensions}, Measures: {measures}")
+        logging.info(f"QUERY_GENERATED - Success: True, Corrected_Query: {final_query}")
+        
+        return CubeErrorResponse(
+            message="success",
+            cube_query=final_query,
+            error_details={
+                "original_error": request.error_message,
+                "correction_timestamp": datetime.now().isoformat()
+            }
+        )
+    except Exception as e:
+        logging.error(f"GENERAL_ERROR - User: {user_details}, Endpoint: cube_error_injection, Error: {str(e)}")
+        return CubeErrorResponse(
+            message="failure",
+            cube_query=None,
+            error_details={"error_type": "processing_error", "details": str(e)}
+        )
