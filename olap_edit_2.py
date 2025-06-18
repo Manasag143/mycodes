@@ -1,171 +1,45 @@
-@app.post("/genai/cube_details_import", response_model=CubeDetailsResponse)
-async def import_cube_details(request: CubeDetailsRequest, user_details: str = Depends(verify_token)):
-    try:
-        # ... your existing code ...
-        
-        # Add these logs before return:
-        logging.info(f"API_HIT - User: {user_details}, Cube: {request.cube_id}, Endpoint: cube_details_import")
-        logging.info(f"LLM_RESPONDED - Success: True, Action: Import cube details")
-        logging.info(f"DIMENSIONS_MEASURES - Dim_count: {len(request.cube_json_dim)}, Msr_count: {len(request.cube_json_msr)}")
-        logging.info(f"QUERY_GENERATED - Success: True, Result: {result['message']}")
-        
-        return CubeDetailsResponse(message=result["message"])
-    except HTTPException as he:
-        logging.error(f"HTTP_ERROR - User: {user_details}, Endpoint: cube_details_import, Error: {str(he)}")
-        return CubeDetailsResponse(message=f"failure:{he}")
-    except Exception as e:
-        logging.error(f"GENERAL_ERROR - User: {user_details}, Endpoint: cube_details_import, Error: {str(e)}")
-        return CubeDetailsResponse(message=f"failure:{e}")
-
-
-
-
-@app.post("/genai/clear_chat", response_model=ClearChatResponse)
-async def clear_chat(request: ClearChatRequest, user_details: str = Depends(verify_token)):
-    try:
-        # ... your existing code ...
-        
-        # Add these logs before return:
-        logging.info(f"API_HIT - User: {user_details}, Cube: {request.cube_id}, Endpoint: clear_chat")
-        logging.info(f"LLM_RESPONDED - Success: True, Action: Clear chat history")
-        logging.info(f"DIMENSIONS_MEASURES - Action: Chat cleared for cube {request.cube_id}")
-        logging.info(f"QUERY_GENERATED - Success: True, Result: Chat history cleared")
-        
-        return ClearChatResponse(status="success")
-    
-    except Exception as e:
-        logging.error(f"GENERAL_ERROR - User: {user_details}, Endpoint: clear_chat, Error: {str(e)}")
-        return ClearChatResponse(status=f"failure: {str(e)}")
-
-
-
-@app.post("/genai/cube_error_injection", response_model=CubeErrorResponse)
-async def handle_cube_error(request: CubeErrorRequest, user_details: str = Depends(verify_token)):
-    try:
-        # ... your existing code ...
-        
-        # Add these logs before return:
-        logging.info(f"API_HIT - User: {user_details}, Cube: {request.cube_id}, Endpoint: cube_error_injection")
-        logging.info(f"LLM_RESPONDED - Success: True, Processing_time: {processing_time}")
-        logging.info(f"DIMENSIONS_MEASURES - Dimensions: {dimensions}, Measures: {measures}")
-        logging.info(f"QUERY_GENERATED - Success: True, Corrected_Query: {final_query}")
-        
-        return CubeErrorResponse(
-            message="success",
-            cube_query=final_query,
-            error_details={
-                "original_error": request.error_message,
-                "correction_timestamp": datetime.now().isoformat()
-            }
-        )
-    except Exception as e:
-        logging.error(f"GENERAL_ERROR - User: {user_details}, Endpoint: cube_error_injection, Error: {str(e)}")
-        return CubeErrorResponse(
-            message="failure",
-            cube_query=None,
-            error_details={"error_type": "processing_error", "details": str(e)}
-        )
-
-
-
-
-@app.post("/genai/user_feedback_injection", response_model=UserFeedbackResponse)
-async def handle_user_feedback(request: UserFeedbackRequest, user_details: str = Depends(verify_token)):
-    try:
-        # ... your existing code ...
-        
-        # Add these logs before return:
-        logging.info(f"API_HIT - User: {user_details}, Cube: {request.cube_id}, Endpoint: user_feedback_injection")
-        logging.info(f"LLM_RESPONDED - Success: True, Feedback: {request.feedback}")
-        logging.info(f"DIMENSIONS_MEASURES - Feedback_processed: {request.user_feedback}")
-        logging.info(f"QUERY_GENERATED - Success: True, New_Query: {final_query if 'final_query' in locals() else 'None'}")
-        
-        return UserFeedbackResponse(
-            message="success",
-            cube_query=final_query if 'final_query' in locals() else "None"
-        )
-        
-    except Exception as e:
-        logging.error(f"GENERAL_ERROR - User: {user_details}, Endpoint: user_feedback_injection, Error: {str(e)}")
-        return UserFeedbackResponse(
-            message="failure",
-            cube_query=None
-        )
-
-
-@app.post("/genai/cube_error_injection", response_model=CubeErrorResponse)
-async def handle_cube_error(request: CubeErrorRequest, user_details: str = Depends(verify_token)):
-    try:
-        # ... your existing code ...
-        
-        # Add these logs before return:
-        logging.info(f"API_HIT - User: {user_details}, Cube: {request.cube_id}, Endpoint: cube_error_injection")
-        logging.info(f"LLM_RESPONDED - Success: True, Processing_time: {processing_time}")
-        logging.info(f"DIMENSIONS_MEASURES - Dimensions: {dimensions}, Measures: {measures}")
-        logging.info(f"QUERY_GENERATED - Success: True, Corrected_Query: {final_query}")
-        
-        return CubeErrorResponse(
-            message="success",
-            cube_query=final_query,
-            error_details={
-                "original_error": request.error_message,
-                "correction_timestamp": datetime.now().isoformat()
-            }
-        )
-    except Exception as e:
-        logging.error(f"GENERAL_ERROR - User: {user_details}, Endpoint: cube_error_injection, Error: {str(e)}")
-        return CubeErrorResponse(
-            message="failure",
-            cube_query=None,
-            error_details={"error_type": "processing_error", "details": str(e)}
-        )
-
-
-
-
-# At the top of your file, after imports
-import logging.config
-
-# Custom logging configuration
-LOGGING_CONFIG = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "default": {
-            "format": "%(asctime)s - %(levelname)s - %(message)s",
-        },
-    },
-    "handlers": {
-        "file": {
-            "formatter": "default",
-            "class": "logging.FileHandler",
-            "filename": "olap_main_api.log",
-        },
-    },
-    "root": {
-        "level": "INFO",
-        "handlers": ["file"],
-    },
-    "loggers": {
-        "uvicorn": {"level": "WARNING"},
-        "uvicorn.error": {"level": "WARNING"},
-        "uvicorn.access": {"level": "WARNING"},
-        "watchfiles": {"level": "WARNING"},
-        "watchfiles.main": {"level": "WARNING"},
-    }
-}
-
 if __name__ == "__main__":
-    # Apply custom logging config
-    logging.config.dictConfig(LOGGING_CONFIG)
+    import logging
+    import uvicorn
+    
+    # Completely disable uvicorn logging
+    uvicorn_logger = logging.getLogger("uvicorn")
+    uvicorn_logger.disabled = True
+    uvicorn_logger.handlers.clear()
+    
+    uvicorn_error = logging.getLogger("uvicorn.error") 
+    uvicorn_error.disabled = True
+    uvicorn_error.handlers.clear()
+    
+    uvicorn_access = logging.getLogger("uvicorn.access")
+    uvicorn_access.disabled = True
+    uvicorn_access.handlers.clear()
+    
+    # Disable watchfiles completely
+    watchfiles_logger = logging.getLogger("watchfiles")
+    watchfiles_logger.disabled = True
+    watchfiles_logger.handlers.clear()
+    
+    watchfiles_main = logging.getLogger("watchfiles.main")
+    watchfiles_main.disabled = True
+    watchfiles_main.handlers.clear()
+    
+    # Also try these additional loggers
+    logging.getLogger("uvicorn.protocols").disabled = True
+    logging.getLogger("uvicorn.protocols.http").disabled = True
+    logging.getLogger("uvicorn.lifespan").disabled = True
+    logging.getLogger("uvicorn.lifespan.on").disabled = True
     
     num_cores = multiprocessing.cpu_count()
     optimal_workers = 2 * num_cores + 1
+    
+    # Run with minimal logging
     uvicorn.run(
         "olap_details_generat:app", 
         host="0.0.0.0", 
         port=8085, 
-        reload=False, 
-        workers=optimal_workers,
-        log_config=LOGGING_CONFIG  # Use our custom config
+        reload=False,
+        workers=1,  # Use 1 worker to avoid multiple processes
+        access_log=False,  # Disable access logging
+        log_level="warning"  # Set to warning level
     )
