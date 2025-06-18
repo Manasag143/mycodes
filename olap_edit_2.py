@@ -119,3 +119,53 @@ async def handle_cube_error(request: CubeErrorRequest, user_details: str = Depen
             cube_query=None,
             error_details={"error_type": "processing_error", "details": str(e)}
         )
+
+
+
+
+# At the top of your file, after imports
+import logging.config
+
+# Custom logging configuration
+LOGGING_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {
+            "format": "%(asctime)s - %(levelname)s - %(message)s",
+        },
+    },
+    "handlers": {
+        "file": {
+            "formatter": "default",
+            "class": "logging.FileHandler",
+            "filename": "olap_main_api.log",
+        },
+    },
+    "root": {
+        "level": "INFO",
+        "handlers": ["file"],
+    },
+    "loggers": {
+        "uvicorn": {"level": "WARNING"},
+        "uvicorn.error": {"level": "WARNING"},
+        "uvicorn.access": {"level": "WARNING"},
+        "watchfiles": {"level": "WARNING"},
+        "watchfiles.main": {"level": "WARNING"},
+    }
+}
+
+if __name__ == "__main__":
+    # Apply custom logging config
+    logging.config.dictConfig(LOGGING_CONFIG)
+    
+    num_cores = multiprocessing.cpu_count()
+    optimal_workers = 2 * num_cores + 1
+    uvicorn.run(
+        "olap_details_generat:app", 
+        host="0.0.0.0", 
+        port=8085, 
+        reload=False, 
+        workers=optimal_workers,
+        log_config=LOGGING_CONFIG  # Use our custom config
+    )
