@@ -1,59 +1,279 @@
-# CHANGE 1: Replace global shared objects in olap_details_generat.py
+# Updated Pydantic Models
+class CubeQueryRequest(BaseModel):
+    user_query: str          # The natural language query from user
+    cube_id: str            # Identifier for the specific cube
+    cube_name: str          # Name of the cube (e.g., "Credit One View")
+    application_name: str   # Name of the application making the request
+    include_conv: str       # Whether to include conversation context ("yes" or "no")
+    regenerate: str         # Whether to regenerate response ("yes" or "no")
 
-# REMOVE these lines:
-# llm_config = LLMConfigure(config_file)
-# llm = llm_config.initialize_llm()
-# embedding = llm_config.initialize_embedding()
-
-# ADD this processor manager class:
-class ProcessorManager:
-    def __init__(self):
-        self.processors = {}
-    
-    def get_processor(self, user_id: str):
+# Updated History class methods
+class History:
+    def __init__(self, history_file: str = history_file):
+        self.history_file = history_file        
         try:
-            if user_id not in self.processors:
-                self.processors[user_id] = OLAPQueryProcessor(config_file)
-            return self.processors[user_id]
+            # Create file if it doesn't exist
+            if not os.path.exists(self.history_file):
+                with open(self.history_file, 'w') as f:
+                    json.dump({"users": {}}, f, indent=2)
         except Exception as e:
-            # Clean up corrupted processor
-            if user_id in self.processors:
-                del self.processors[user_id]
+            logging.error(f"Failed to create history file: {str(e)}")
+            raise
+        
+        self.history = self.load()
+
+    def load(self) -> Dict:
+        try:
+            if os.path.exists(self.history_file):
+                with open(self.history_file, 'r') as f:
+                    data = json.load(f)                    
+                    # Migrate old format to new format if needed
+                    if "users" not in data:
+                        migrated_data = {"users": {}}
+                        for key, value in data.items():
+                            if key != "cube_id":  # Skip the old top-level cube_id
+                                migrated_data["users"][key] = {}
+                                if isinstance(value, list):
+                                    old_cube_id = data.get("cube_id", "")
+                                    migrated_data["users"][key][old_cube_id] = value
+                        return migrated_data
+                    
+                    return data
+            return {"users": {}}
+        except Exception as e:
+            logging.error(f"Error loading conversation history: {str(e)}")
+            return {"users": {}}
+
+    def save(self, history: Dict):
+        try:
+            with open(self.history_file, 'w') as f:
+                json.dump(history, f, indent=4)
+            
+            # Verify the save
+            with open(self.history_file, 'r') as f:
+                saved_data = json.load(f)
+                
+        except Exception as e:
+            logging.error(f"Error saving conversation history: {str(e)}")
+            raise
+
+    def update(self, user_id: str, query_data: Dict, cube_id: str, cube_name: str = None):
+        try:
+            
+            # Initialize nested structure if needed
+            if "users" not in self.history:
+                self.history["users"] = {}
+                
+            if user_id not in self.history["users"]:
+                self.history["users"][user_id] = {}
+            
+            if cube_id not in self.history["users"][user_id]:
+                self.history["users"][user_id][cube_id] = []
+            
+            # Add new conversation without cube_id inside the block
+            new_conversation = {
+                "timestamp": datetime.now().isoformat(),
+                "query": query_data["query"],
+                "dimensions": query_data["dimensions"],
+                "measures": query_data["measures"],
+                "response": query_data["response"]
+            }
+            
+            # Add cube_name if provided
+            if cube_name:
+                new_conversation["cube_name"] = cube_name
+            
+            self.history["users"][user_id][cube_id].append(new_conversation)
+            # Keep last 5 conversations for this user and cube
+            self.history["users"][user_id][cube_id] = self.history["users"][user_id][cube_id][-5:]
+            self.save(self.history)
+        
+        except Exception as e:
+            logging.error(f"Error in update: {str(e)}")
             raise
     
-    def cleanup_processor(self, user_id: str):
-        if user_id in self.processors:
+    def retrieve(self, user_id: str, cube_id: str, regenerate: str = "no"):
+        """Retrieve conversation for this user and cube"""
+        try:            
+            # Check if we have history for this user and cube
+            if "users" not in self.history:
+                self.history["users"] = {}
+            
+            if user_id not in self.history["users"]:
+                self.history["users"][user_id] = {}
+                return self._empty_conversation(cube_id)
+            
+            if cube_id not in self.history["users"][user_id]:
+                self.history["users"][user_id][cube_id] = []
+                return self._empty_conversation(cube_id)
+            
             try:
-                del self.processors[user_id]
-                import gc
-                gc.collect()
-            except Exception as e:
-                logging.error(f"Error cleaning up processor: {e}")
+                conversations = self.history["users"][user_id][cube_id]
+                if not conversations:
+                    return self._empty_conversation(cube_id)
+                
+                # If regenerate is "yes", get 2nd last conversation (not the most recent)
+                if regenerate.lower() == "yes" and len(conversations) >= 2:
+                    logging.info(f"REGENERATE_MODE - Using 2nd last conversation for regeneration")
+                    return conversations[-2]  # Return 2nd last conversation
+                else:
+                    # Normal mode: return last conversation
+                    logging.info(f"NORMAL_MODE - Using last conversation")
+                    return conversations[-1]
+                    
+            except IndexError:
+                logging.info("No conversations found in history")
+                return self._empty_conversation(cube_id)
+        except Exception as e:
+            logging.error(f"Error in retrieve: {str(e)}")
+            return self._empty_conversation(cube_id)
+    
+    def _empty_conversation(self, cube_id: str, cube_name: str = None):
+        """Helper method to return an empty conversation structure"""
+        empty_conv = {
+            "timestamp": datetime.now().isoformat(),
+            "query": "",
+            "dimensions": "",
+            "measures": "",
+            "response": ""
+        }
+        
+        if cube_name:
+            empty_conv["cube_name"] = cube_name
+            
+        return empty_conv
+    
+    def clear_history(self, user_id: str, cube_id: str):
+        """Clear conversation history for a specific user and cube"""
+        try:
+            if "users" in self.history and user_id in self.history["users"] and cube_id in self.history["users"][user_id]:
+                self.history["users"][user_id][cube_id] = []
+                self.save(self.history)
+                return True
+            return False
+        except Exception as e:
+            logging.error(f"Error clearing history: {str(e)}")
+            return False
 
-# Initialize global processor manager
-processor_manager = ProcessorManager()
+# Updated process_query function
+async def process_query(user_query: str, cube_id: str, user_id: str, cube_name="Credit One View", include_conv="no", regenerate="no") -> Dict:
+    logging.info(f"OLAP_PROCESS_START - Starting OLAP query processing")
+    logging.info(f"OLAP_PROCESS_INPUT - Query: '{user_query}', Cube_ID: {cube_id}, Include_Conv: {include_conv}, Regenerate: {regenerate}")
+    try:
+        # Get or create processor for this user
+        with open(r'conversation_history.json') as conv_file: 
+            conv_json = json.load(conv_file)
+            
+            # Initialize user structure if needed
+            if "users" not in conv_json:
+                conv_json["users"] = {}
+                
+            if conv_json.get("users", {}).get(user_id) is None:
+                print("Initializing user in conversation history")
+                if "users" not in conv_json:
+                    conv_json["users"] = {}
+                conv_json["users"][user_id] = {}
+                with open(r'conversation_history.json', 'w') as conv_file:
+                    json.dump(conv_json, conv_file)
 
-# CHANGE 2: Update generate_cube_query endpoint
+        # Handle conversation context based on include_conv and regenerate parameters
+        if include_conv.lower() == "no":
+            # No conversation context
+            logging.info(f"CONVERSATION_CONTEXT - No conversation context requested")
+            prev_conversation = {
+                "timestamp": datetime.now().isoformat(),
+                "query": "",
+                "dimensions": "",
+                "measures": "",
+                "response": "",
+                "cube_id": cube_id,
+                "cube_name": cube_name
+            }
+        else:
+            # Get conversation history with regenerate consideration
+            history_manager = History()
+            logging.info(f"CONVERSATION_CONTEXT - Getting conversation history with regenerate={regenerate}")
+            prev_conversation = history_manager.retrieve(user_id, cube_id, regenerate)
+            
+            # Ensure cube_name is set (it might be missing in older records)
+            if "cube_name" not in prev_conversation:
+                prev_conversation["cube_name"] = cube_name
 
+        # Get processor for this user
+        olap_processors[user_id] = OLAPQueryProcessor(config_file)
+        processor = olap_processors[user_id]
+
+        # Process query and get results
+        query, final_query, processing_time, dimensions, measures = processor.process_query(
+            user_query, cube_id, prev_conversation, cube_name, include_conv
+        )
+        
+        # Prepare response data
+        response_data = {
+            "query": query,
+            "dimensions": dimensions,
+            "measures": measures,
+            "response": final_query,
+        }
+
+        # Update history logic based on regenerate parameter
+        if regenerate.lower() == "yes":
+            # For regeneration, replace the last conversation instead of adding new one
+            logging.info(f"REGENERATE_UPDATE - Replacing last conversation with regenerated response")
+            history_manager = History()
+            # Remove the last conversation and add the new regenerated one
+            if "users" in history_manager.history and user_id in history_manager.history["users"] and cube_id in history_manager.history["users"][user_id]:
+                if history_manager.history["users"][user_id][cube_id]:
+                    # Remove the last (incorrect) conversation
+                    history_manager.history["users"][user_id][cube_id].pop()
+            # Add the new regenerated conversation
+            history_manager.update(user_id, response_data, cube_id, cube_name)
+        elif include_conv.lower() == "yes":
+            # Normal conversation flow - add new conversation
+            logging.info(f"NORMAL_UPDATE - Adding new conversation to history")
+            history_manager = History()
+            history_manager.update(user_id, response_data, cube_id, cube_name)
+
+        return {
+            "message": "success",
+            "cube_query": final_query,
+            "dimensions": dimensions,
+            "measures": measures
+        }
+    except Exception as e:
+        logging.error(f"Error processing query: {e}")
+        return {
+            "message": f"failure{e}",
+            "cube_query": None,
+            "dimensions": "",
+            "measures": ""
+        }
+
+# Updated API endpoint
 @app.post("/genai/cube_query_generation", response_model=QueryResponse)
 async def generate_cube_query(request: CubeQueryRequest, user_details: str = Depends(verify_token)):
     user_id = f"user_{user_details}"
-    
+    logging.info(f"API_HIT - cube_query_generation endpoint hit by user: {user_details}")
+    logging.info(f"API_REQUEST - Query: '{request.user_query}', Cube_ID: {request.cube_id}, Include_Conv: {request.include_conv}, Regenerate: {request.regenerate}, App: {request.application_name}")
+
     try:
         cube_id = request.cube_id
         cube_dir = os.path.join(vector_db_path, cube_id)
         
         if not os.path.exists(cube_dir):
+            logging.error(f"API_ERROR - Cube directory not found for cube_id: {cube_id}")
             return QueryResponse(
                 message="failure",
                 cube_query="Cube data doesn't exist",
                 dimensions="",
                 measures=""
             )
+        logging.info(f"API_CUBE_VALIDATION - Cube directory validated for cube_id: {cube_id}")
         
-        # Get conversation context
+        # Get conversation context with regenerate consideration
         history_manager = History()
         if request.include_conv.lower() == "no":
+            logging.info(f"API_CONTEXT - Creating new conversation context (include_conv=no)")
             prev_conversation = {
                 "timestamp": datetime.now().isoformat(),
                 "query": "",
@@ -64,12 +284,14 @@ async def generate_cube_query(request: CubeQueryRequest, user_details: str = Dep
                 "cube_name": request.cube_name
             }
         else:
-            prev_conversation = history_manager.retrieve(user_id, request.cube_id)
+            logging.info(f"API_CONTEXT - Retrieving conversation context (include_conv=yes, regenerate={request.regenerate})")
+            prev_conversation = history_manager.retrieve(user_id, request.cube_id, request.regenerate)
             if "cube_name" not in prev_conversation:
                 prev_conversation["cube_name"] = request.cube_name
 
         # Get processor with error recovery
         processor = processor_manager.get_processor(user_id)
+        logging.info(f"API_PROCESSOR - Processor obtained successfully")
         
         query, final_query, processing_time, dimensions, measures = processor.process_query(
             request.user_query,
@@ -78,16 +300,34 @@ async def generate_cube_query(request: CubeQueryRequest, user_details: str = Dep
             request.cube_name,
             request.include_conv
         )
+        logging.info(f"API_PROCESSING - Query processing completed successfully in {processing_time:.2f} seconds")
         
-        # Update history
+        # Update history based on regenerate parameter
         response_data = {
             "query": request.user_query,
             "dimensions": dimensions,
             "measures": measures,
             "response": final_query
         }
-        history_manager.update(user_id, response_data, request.cube_id, request.cube_name)
         
+        if request.regenerate.lower() == "yes":
+            # For regeneration, replace the last conversation instead of adding new one
+            logging.info(f"API_REGENERATE - Replacing last conversation with regenerated response")
+            # Remove the last conversation and add the new regenerated one
+            if "users" in history_manager.history and user_id in history_manager.history["users"] and request.cube_id in history_manager.history["users"][user_id]:
+                if history_manager.history["users"][user_id][request.cube_id]:
+                    # Remove the last (incorrect) conversation
+                    history_manager.history["users"][user_id][request.cube_id].pop()
+            # Add the new regenerated conversation
+            history_manager.update(user_id, response_data, request.cube_id, request.cube_name)
+        elif request.include_conv.lower() == "yes":
+            # Normal conversation flow - add new conversation
+            logging.info(f"API_NORMAL_UPDATE - Adding new conversation to history")
+            history_manager.update(user_id, response_data, request.cube_id, request.cube_name)
+        
+        logging.info(f"API_HISTORY_UPDATE - History updated successfully")
+        logging.info(f"API_SUCCESS - Query generation completed successfully")
+        logging.info(f"API_RESPONSE - Final query: {final_query}")
         return QueryResponse(
             message="success",
             cube_query=final_query,
@@ -107,211 +347,3 @@ async def generate_cube_query(request: CubeQueryRequest, user_details: str = Dep
             dimensions="",
             measures=""
         )
-
-# CHANGE 3: Update process_cube_details to clean up processors after import
-
-async def process_cube_details(cube_json_dim, cube_json_msr, cube_id: str) -> Dict:
-    try:
-        # ... existing code ...
-        
-        # At the end, add this cleanup:
-        processor_manager.processors.clear()  # Force reload of all processors
-        
-        return {"message": "success"}
-        
-    except Exception as e:
-        logging.error(f"Error processing cube details: {e}")
-        return {"message": f"failure: {str(e)}"}
-
-# CHANGE 4: Add error recovery to DimensionMeasure class in cube_query_v4.py
-
-class DimensionMeasure:
-    # ... existing code ...
-    
-    def get_dimensions(self, query: str, cube_id: str, prev_conv: dict) -> str:
-        """Extracts dimensions from the query with error recovery."""
-        max_retries = 2
-        
-        for attempt in range(max_retries + 1):
-            try:
-                # ... existing dimension extraction code ...
-                
-                # Load documents from JSON
-                documents = load_documents_from_json(cube_id, "dimensions", vector_db_path)
-                
-                # Initialize BM25 retriever
-                bm25_retriever = BM25Retriever.from_documents(documents, k=10)
-                    
-                # Set up vector store directory
-                cube_dir = os.path.join(vector_db_path, cube_id)
-                cube_dim = os.path.join(cube_dir, "dimensions")
-                persist_directory_dim = cube_dim
-                
-                # CRITICAL: Create new embedding instance each time
-                embedding_instance = self.embedding
-                if attempt > 0:
-                    # Force new embedding on retry
-                    import gc
-                    gc.collect()
-                
-                load_embedding_dim = Chroma(persist_directory=persist_directory_dim, embedding_function=embedding_instance)
-                vector_retriever = load_embedding_dim.as_retriever(search_type="similarity", search_kwargs={"k": 20})
-                
-                # ... rest of existing code ...
-                
-                return dim
-                
-            except Exception as e:
-                logging.error(f"Dimension extraction attempt {attempt + 1} failed: {e}")
-                
-                if attempt == max_retries:
-                    raise
-                
-                # Clean up before retry
-                import gc
-                gc.collect()
-
-    def get_measures(self, query: str, cube_id: str, prev_conv: dict) -> str:
-        """Extracts measures from the query with error recovery."""
-        max_retries = 2
-        
-        for attempt in range(max_retries + 1):
-            try:
-                # ... existing measure extraction code ...
-                
-                # Load documents from JSON
-                documents = load_documents_from_json(cube_id, "measures", vector_db_path)
-                
-                bm25_retriever = BM25Retriever.from_documents(documents, k=10)
-
-                cube_msr = os.path.join(vector_db_path, cube_id)
-                cube_msr = os.path.join(cube_msr, "measures")
-                
-                persist_directory_msr = cube_msr
-                
-                # CRITICAL: Create new embedding instance each time
-                embedding_instance = self.embedding
-                if attempt > 0:
-                    import gc
-                    gc.collect()
-                
-                load_embedding_msr = Chroma(persist_directory=persist_directory_msr, embedding_function=embedding_instance)
-                vector_retriever = load_embedding_msr.as_retriever(search_type="similarity", search_kwargs={"k": 20})
-                
-                # ... rest of existing code ...
-                
-                return msr
-                
-            except Exception as e:
-                logging.error(f"Measure extraction attempt {attempt + 1} failed: {e}")
-                
-                if attempt == max_retries:
-                    raise
-                
-                # Clean up before retry
-                import gc
-                gc.collect()
-
-# CHANGE 5: Add state reset method to OLAPQueryProcessor
-
-class OLAPQueryProcessor(LLMConfigure):
-    # ... existing code ...
-    
-    def reset_state(self):
-        """Reset processor state after error"""
-        try:
-            logging.info("Resetting processor state")
-            
-            # Reset components
-            self.llm = None
-            self.embedding = None
-            self.dim_measure = None
-            self.final = None
-            self.conversational = None
-            
-            # Force garbage collection
-            import gc
-            gc.collect()
-            
-            # Reinitialize
-            self.llm = self.initialize_llm()
-            self.embedding = self.initialize_embedding()
-            self.dim_measure = DimensionMeasure(self.llm, self.embedding, self.load_json)
-            self.final = FinalQueryGenerator(query="", dimensions=None, measures=None, llm=self.llm)
-            self.conversational = ConversationalQueryGenerator(query="", dimensions=None, measures=None, llm=self.llm)
-            
-        except Exception as e:
-            logging.error(f"Error resetting state: {e}")
-            raise
-
-    def process_query(self, query: str, cube_id: str, prev_conv: dict, cube_name: str, include_conv: str = "no") -> Tuple[str, str, float]:
-        try:
-            # ... existing process_query code ...
-            
-            return query, final_query, processing_time, dimensions, measures
-            
-        except Exception as e:
-            logging.error(f"Error in query processing: {e}")
-            
-            # CRITICAL: Reset state on error
-            try:
-                self.reset_state()
-            except Exception as reset_error:
-                logging.error(f"State reset failed: {reset_error}")
-            
-            raise
-
-# CHANGE 6: Enhanced error handling in load_documents_from_json
-
-def load_documents_from_json(cube_id: str, doc_type: str, base_dir: str) -> List[Document]:
-    """Load documents from JSON file with validation"""
-    try:
-        file_path = os.path.join(base_dir, cube_id, f"{cube_id}_{doc_type}.json")
-        
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"Cube data doesn't exist at {file_path}")
-            
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        # Validate data
-        if not isinstance(data, list) or not data:
-            raise ValueError(f"Invalid or empty {doc_type} data")
-            
-        # Convert to Document objects
-        documents = []
-        for doc in data:
-            if all(key in doc for key in ['Group Name', 'Level Name', 'Description']):
-                content = f"Group Name:{doc['Group Name']}--Level Name:{doc['Level Name']}--Description:{doc['Description']}"
-                documents.append(Document(page_content=content))
-        
-        if not documents:
-            raise ValueError(f"No valid documents found in {doc_type} data")
-            
-        return documents
-            
-    except Exception as e:
-        logging.error(f"Error loading {doc_type} documents: {str(e)}")
-        raise
-
-# CHANGE 7: Add cleanup to cube_details_import endpoint
-
-@app.post("/genai/cube_details_import", response_model=CubeDetailsResponse)
-async def import_cube_details(request: CubeDetailsRequest, user_details: str = Depends(verify_token)):
-    try:
-        user_id = f"user_{user_details}"
-        
-        result = await process_cube_details(
-            request.cube_json_dim,
-            request.cube_json_msr,
-            request.cube_id
-        )
-        
-        # CRITICAL: Clean up all processors after cube import
-        processor_manager.processors.clear()
-        
-        return CubeDetailsResponse(message=result["message"])
-        
-    except Exception as e:
-        logging.error(f"Error in import_cube_details: {e}")
-        return CubeDetailsResponse(message=f"failure: {str(e)}")
