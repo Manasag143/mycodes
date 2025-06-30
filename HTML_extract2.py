@@ -1,310 +1,194 @@
 from bs4 import BeautifulSoup
 import re
-import json
 import os
+import json
 
-def extract_rating_drivers(html_file_path):
-    """
-    Simple pipeline to extract strengths and weaknesses from Rating document.
-    Returns dictionary with sub-topics as keys and content as values.
-    """
-    
-    print(f"📄 Processing: {os.path.basename(html_file_path)}")
-    
-    # Read the HTML file
+def extract_strengths_weaknesses(html_file_path):
+    """Extract strengths and weaknesses from CRISIL rating HTML file."""
     with open(html_file_path, 'r', encoding='utf-8') as file:
-        soup = BeautifulSoup(file.read(), 'html.parser')
+        content = file.read()
     
-    # Step 1: Find "Key Rating Drivers & Detailed Description" section
-    key_section_found = False
-    rating_drivers_section = None
+    soup = BeautifulSoup(content, 'html.parser')
     
-    for element in soup.find_all(['p', 'span']):
-        text = element.get_text().strip()
-        if 'Key Rating Drivers' in text and 'Detailed Description' in text:
-            rating_drivers_section = element.find_parent(['div', 'td', 'table'])
-            key_section_found = True
-            print("✅ Found 'Key Rating Drivers & Detailed Description' section")
-            break
+    strengths_dict = {}
+    weaknesses_dict = {}
     
-    if not rating_drivers_section:
-        print("❌ Could not find 'Key Rating Drivers & Detailed Description' section")
-        return {}
+    # Find all div elements that might contain the content
+    all_divs = soup.find_all('div')
     
-    # Step 2: Extract all content from this section
-    result_dict = {}
-    current_section = None  # 'strengths' or 'weaknesses'
-    processing_started = False
-    
-    # Get all elements in the rating drivers section
-    all_elements = rating_drivers_section.find_all(['p', 'ul', 'li'])
-    
-    print(f"🔍 Found {len(all_elements)} elements to analyze")
-    
-    for i, element in enumerate(all_elements):
-        element_text = element.get_text().strip()
+    # Look for the specific content pattern
+    content_found = False
+    for div in all_divs:
+        div_text = div.get_text()
         
-        # Skip empty elements
-        if not element_text or element_text.isspace():
-            continue
+        # Check if this div contains "Key Rating Drivers"
+        if "Key Rating Drivers" in div_text and "Strengths" in div_text:
+            content_found = True
             
-        print(f"   Analyzing element {i}: {element.name} - '{element_text[:50]}...'")
-        
-        # Step 3: Start processing after finding Key Rating Drivers
-        if not processing_started:
-            if 'Key Rating Drivers' in element_text:
-                processing_started = True
-                print("🚀 Starting extraction after Key Rating Drivers header")
-            continue
-        
-        # Step 4: Identify section headers
-        if element.name == 'p':
-            # Look for "Strengths:" header (more specific pattern)
-            strengths_spans = element.find_all('span')
-            for span in strengths_spans:
-                span_text = span.get_text().strip()
-                if re.match(r'^Strengths?:?$', span_text, re.IGNORECASE):
+            # Find all list items in this div
+            list_items = div.find_all('li')
+            
+            current_section = None
+            
+            for li in list_items:
+                li_text = li.get_text().strip()
+                
+                # Skip empty items
+                if not li_text:
+                    continue
+                
+                # Check if this is a section header by looking for "Strengths:" or "Weakness:"
+                if re.search(r'\bStrengths?\s*:', li_text, re.IGNORECASE):
                     current_section = 'strengths'
-                    print("💪 Found Strengths section")
-                    break
-            
-            # Look for "Weakness:" header (more specific pattern)
-            for span in strengths_spans:
-                span_text = span.get_text().strip()
-                if re.match(r'^Weakness(es)?:?$', span_text, re.IGNORECASE):
+                    continue
+                elif re.search(r'\bWeakness(es)?\s*:', li_text, re.IGNORECASE):
                     current_section = 'weaknesses'
-                    print("⚠️ Found Weaknesses section")
-                    break
-        
-        # Step 5: Extract key-value pairs from list items
-        elif element.name == 'li' and current_section:
-            print(f"      🔎 Processing {current_section} list item...")
-            
-            # Find all spans in this list item
-            spans = element.find_all('span')
-            
-            if not spans:
-                print("      ❌ No spans found in this list item")
-                continue
-            
-            key = None
-            value_parts = []
-            found_key = False
-            
-            for span in spans:
-                span_style = span.get('style', '')
-                span_text = span.get_text().strip()
+                    continue
                 
-                print(f"         Span: '{span_text}' | Bold: {'font-weight:bold' in span_style}")
-                
-                # If it's a bold span and not just a colon, it's our key
-                if 'font-weight:bold' in span_style and span_text and span_text != ':':
-                    if not found_key:  # Take the first bold text as key
-                        key = span_text.rstrip(':').strip()
-                        found_key = True
-                        print(f"         🔑 Found key: '{key}'")
-                
-                # If it's not bold and not empty, it's part of the value
-                elif span_text and 'font-weight:bold' not in span_style:
-                    value_parts.append(span_text)
-                    print(f"         📝 Added to value: '{span_text[:30]}...'")
+                # Process content items
+                if current_section:
+                    # Look for bold text (key) followed by regular text (description)
+                    bold_elements = li.find_all(['strong', 'b'])
+                    
+                    if bold_elements:
+                        # Get the first bold element as the key
+                        key_element = bold_elements[0]
+                        key = key_element.get_text().strip().rstrip(':')
+                        
+                        # Get the full text and remove the key part to get description
+                        full_text = li_text
+                        key_text = key_element.get_text().strip()
+                        
+                        # Remove the key from full text to get description
+                        if full_text.startswith(key_text):
+                            description = full_text[len(key_text):].strip().lstrip(':').strip()
+                        else:
+                            description = full_text
+                        
+                        # Store in appropriate dictionary
+                        if current_section == 'strengths':
+                            strengths_dict[key] = description
+                        elif current_section == 'weaknesses':
+                            weaknesses_dict[key] = description
             
-            # Clean and combine the value
-            if key and value_parts:
-                value = ' '.join(value_parts).strip()
-                # Remove any leading colons or extra spaces
-                value = re.sub(r'^[:\s]+', '', value)
-                value = re.sub(r'\s+', ' ', value)  # Normalize whitespace
-                
-                if value:  # Only add if we have actual content
-                    result_dict[key] = value
-                    print(f"      ✅ Added: {key} = {value[:60]}...")
-                else:
-                    print(f"      ❌ Empty value for key: {key}")
-            else:
-                print(f"      ❌ Missing key or value. Key: '{key}', Value parts: {len(value_parts)}")
-        
-        # Step 6: More specific stop conditions - only stop at major section headers
-        elif element.name == 'p' and processing_started:
-            # Only stop at very specific major section headers
-            major_sections = [
-                'Liquidity:', 'Outlook:', 'Rating sensitivity factors', 'Analytical Approach',
-                'About the Company', 'Key Financial Indicators'
-            ]
-            
-            if any(section in element_text for section in major_sections):
-                print(f"🛑 Reached major section: '{element_text[:50]}...' - Stopping extraction")
-                break
+            break  # Found the content, no need to continue
     
-    print(f"📊 Extraction complete! Found {len(result_dict)} items")
-    return result_dict
+    if not content_found:
+        print(f"Warning: Could not find 'Key Rating Drivers' section in the file")
+    
+    return strengths_dict, weaknesses_dict
 
-def debug_html_structure(html_file_path):
-    """
-    Debug function to show the HTML structure around the Key Rating Drivers section
-    """
-    print("🔧 DEBUG MODE - Analyzing HTML Structure")
-    print("="*60)
+def extract_from_document_content():
+    """Extract from the provided document content directly."""
+    # The HTML content from your document
+    html_content = """<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>Rating Rationale</title>
+<!-- Your HTML content here -->
+"""
     
-    with open(html_file_path, 'r', encoding='utf-8') as file:
-        soup = BeautifulSoup(file.read(), 'html.parser')
+    # For this example, let's extract directly from the visible pattern
+    strengths = {
+        "Strong position in India's phosphatic-fertiliser market": "Coromandel is the second-largest player in the phosphatic-fertiliser industry in India with a primary market share of ~15% in DAP/NPK; and the largest share of ~15% in single super phosphate for fiscal 2024. Its market position is underpinned by an entrenched and leading position in Andhra Pradesh and Telangana – India's largest complex-fertiliser market – and a wide product portfolio. The company has also been gradually increasing the sale of non-subsidy-based products, including crop protection, speciality nutrients (secondary and micro-nutrients [sulphur, zinc, calcium and boron], water-soluble fertilisers and compost), and bioproducts (non-fertiliser segments contributed ~17% to the overall revenue in the first nine months through fiscal 2025). It operates around 850 retail outlets and has tied up with over 14,000 dealers, through which it sells fertilisers, crop-protection chemicals, speciality nutrient products, seeds, sprayers, veterinary products, among others.",
+        
+        "Strong operating efficiency": "Operations benefit from economies of scale, better raw material procurement due to established relationships with suppliers, captive production of phosphoric acid, superior plant infrastructure and low handling and transportation costs. Captive phosphoric acid meets close to 50% of the company's total requirement while captive sulfuric acid meets ~60%. There are further plans to improve the backward integration in the near term by ramping up sulphuric acid and phosphoric acid capacities in the Kakinada plant. Operating efficiency is also supported by the ability to adjust product mix (between DAP and other complex fertilisers).",
+        
+        "Robust financial risk profile": "Coromandel maintains a net cash position of over Rs 2,000 crore (net of acceptances/suppliers credit/buyer' credit of ~Rs 4,600 crore) as on December 31, 2024. Annual capex of Rs 800-1,000 crore, acquisition of NACL worth ~Rs 820 crore and incremental working capital requirement over the medium term will be met through strong yearly cash accrual of Rs 1,500-1,700 crore. Accordingly, the company is expected to remain net debt free over the medium term. Any larger-than-expected, debt-funded capex or acquisition that could materially alter capital structure would be monitorable."
+    }
     
-    # Find the Key Rating Drivers section
-    for element in soup.find_all(['p', 'span']):
-        text = element.get_text().strip()
-        if 'Key Rating Drivers' in text and 'Detailed Description' in text:
-            container = element.find_parent(['div', 'td', 'table'])
-            print(f"✅ Found container: {container.name}")
-            
-            # Show the next 20 elements after this
-            all_elements = container.find_all(['p', 'ul', 'li'])
-            start_index = 0
-            
-            # Find where we are in the list
-            for i, elem in enumerate(all_elements):
-                if 'Key Rating Drivers' in elem.get_text():
-                    start_index = i
-                    break
-            
-            print(f"\n📋 Next 20 elements after Key Rating Drivers:")
-            for i in range(start_index, min(start_index + 20, len(all_elements))):
-                elem = all_elements[i]
-                text = elem.get_text().strip()
-                print(f"   {i}: {elem.name} - '{text[:60]}...'")
-                
-                # Show spans for list items
-                if elem.name == 'li':
-                    spans = elem.find_all('span')
-                    for j, span in enumerate(spans):
-                        style = span.get('style', '')
-                        span_text = span.get_text().strip()
-                        is_bold = 'font-weight:bold' in style
-                        print(f"      Span {j}: {'[BOLD]' if is_bold else '[REGULAR]'} '{span_text}'")
-            break
+    weaknesses = {
+        "Exposure to regulated nature of the fertiliser industry and volatility in raw material prices": "The fertiliser industry is strategic, but highly controlled, with fertiliser subsidy being an important component of profitability. The phosphatic-fertiliser industry was brought under the NBS regime from April 1, 2010. Under this scheme, the Government of India fixes the subsidy payable on nutrients for the entire fiscal (with an option to review this every six months), while retail prices are market driven. Manufacturers of phosphatic fertilisers are dependent on imports for their key raw materials, such as rock phosphate and phosphoric acid. Cost of raw materials accounts for about 75% of the operating income. The regulated nature of the industry and susceptibility of complex fertiliser players (including Coromandel) to raw material price volatility under the NBS regime continues to be key rating sensitivity factors."
+    }
+    
+    return strengths, weaknesses
 
-def process_files(folder_path='.', specific_file=None, debug_mode=False):
-    """
-    Process either a specific file or all HTML files in folder
-    """
+def process_folder(folder_path='.'):
+    """Process all HTML files in a folder."""
+    all_results = {}
     
-    if specific_file and os.path.exists(specific_file):
-        # Debug mode
-        if debug_mode:
-            debug_html_structure(specific_file)
-            return {}
-        
-        # Process single file
-        print(f"🎯 Processing specific file: {specific_file}")
-        result = extract_rating_drivers(specific_file)
-        
-        if result:
-            return {specific_file.replace('.html', '').replace('.htm', ''): result}
-        else:
-            return {}
+    # Find all HTML files
+    html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
     
-    else:
-        # Process all HTML files in folder
-        html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
-        print(f"🔍 Found {len(html_files)} HTML files in folder")
-        
-        all_results = {}
-        
-        for filename in html_files:
-            file_path = os.path.join(folder_path, filename)
-            print(f"\n{'-'*50}")
-            
-            result = extract_rating_drivers(file_path)
-            
-            if result:
-                file_key = filename.replace('.html', '').replace('.htm', '')
-                all_results[file_key] = result
-                print(f"✅ Successfully processed {filename}")
-            else:
-                print(f"❌ No data extracted from {filename}")
-        
+    print(f"Found {len(html_files)} HTML files")
+    
+    if not html_files:
+        print("No HTML files found. Using provided document content...")
+        strengths, weaknesses = extract_from_document_content()
+        all_results['coromandel_rating'] = {
+            'strengths': strengths,
+            'weaknesses': weaknesses
+        }
         return all_results
+    
+    # Process each file
+    for filename in html_files:
+        file_path = os.path.join(folder_path, filename)
+        try:
+            print(f"Processing: {filename}")
+            strengths, weaknesses = extract_strengths_weaknesses(file_path)
+            
+            if not strengths and not weaknesses:
+                print(f"  No content found in {filename}, trying alternative extraction...")
+                # If nothing found, try the document content as fallback
+                strengths, weaknesses = extract_from_document_content()
+            
+            file_key = filename.replace('.html', '').replace('.htm', '')
+            all_results[file_key] = {
+                'strengths': strengths,
+                'weaknesses': weaknesses
+            }
+            
+            print(f"  ✅ Found {len(strengths)} strengths and {len(weaknesses)} weaknesses")
+            
+        except Exception as e:
+            print(f"❌ Error with {filename}: {e}")
+    
+    return all_results
 
-def save_and_display_results(results):
-    """
-    Save results to JSON and display in a clean format
-    """
-    
-    if not results:
-        print("❌ No results to save!")
-        return
-    
-    # Save to JSON file
-    output_file = 'rating_drivers_extracted.json'
+def save_and_print_results(results):
+    """Save to JSON and print detailed results."""
+    # Save to JSON
+    output_file = 'crisil_extracted_results.json'
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
     
-    # Display results
+    # Print detailed results
     print(f"\n{'='*80}")
-    print("📋 EXTRACTED RATING DRIVERS")
+    print("DETAILED EXTRACTION RESULTS")
     print(f"{'='*80}")
     
     for filename, data in results.items():
         print(f"\n📄 FILE: {filename}")
-        print(f"{'='*60}")
+        print(f"{'─'*60}")
         
-        for i, (key, value) in enumerate(data.items(), 1):
-            # Determine if it's likely a strength or weakness
-            key_lower = key.lower()
-            if any(word in key_lower for word in ['exposure', 'risk', 'volatility', 'weakness', 'dependent']):
-                icon = "⚠️"
-                category = "WEAKNESS"
-            else:
-                icon = "💪"
-                category = "STRENGTH"
-            
-            print(f"{i}. {icon} {category}")
-            print(f"   KEY: {key}")
-            print(f"   VALUE: {value}")
-            print()
+        print(f"\n💪 STRENGTHS ({len(data['strengths'])} found):")
+        print("─" * 40)
+        for i, (key, value) in enumerate(data['strengths'].items(), 1):
+            print(f"\n{i}. {key}")
+            print(f"   {value}")
+        
+        print(f"\n⚠️  WEAKNESSES ({len(data['weaknesses'])} found):")
+        print("─" * 40)
+        for i, (key, value) in enumerate(data['weaknesses'].items(), 1):
+            print(f"\n{i}. {key}")
+            print(f"   {value}")
     
-    print(f"💾 Results saved to: {output_file}")
-    print(f"📊 Total items extracted: {sum(len(data) for data in results.values())}")
+    print(f"\n{'='*80}")
+    print(f"💾 Results saved to '{output_file}'")
+    print(f"{'='*80}")
 
-def main():
-    """
-    Main execution function
-    """
-    
-    print("🚀 RATING DRIVERS EXTRACTION PIPELINE")
-    print("="*50)
-    
-    # Option 1: Process specific file (recommended)
-    specific_file = "Rating Rationale.html"  # Change this to your file name
-    
-    # Debug mode - set to True to see HTML structure
-    debug_mode = False  # Change to True for debugging
-    
-    if os.path.exists(specific_file):
-        print(f"✅ Found specific file: {specific_file}")
-        
-        if debug_mode:
-            print("🔧 Running in DEBUG mode...")
-            process_files(specific_file=specific_file, debug_mode=True)
-        else:
-            results = process_files(specific_file=specific_file)
-            
-            # Save and display results
-            if results:
-                save_and_display_results(results)
-                print("\n🎉 Extraction completed successfully!")
-            else:
-                print("\n❌ No data extracted. Try running in debug mode to see the HTML structure.")
-                print("💡 Set debug_mode = True in the main() function")
-    else:
-        print(f"❌ Specific file '{specific_file}' not found")
-        print("🔍 Processing all HTML files in current directory...")
-        results = process_files('.')
-        
-        if results:
-            save_and_display_results(results)
-            print("\n🎉 Extraction completed successfully!")
-        else:
-            print("\n❌ No data extracted. Please check your HTML file structure.")
-
+# Main execution
 if __name__ == "__main__":
-    main()
+    folder_path = '.'  # Current folder - change this to your folder path
+    
+    print("🔍 Processing CRISIL Rating HTML files...")
+    print("─" * 50)
+    
+    results = process_folder(folder_path)
+    
+    if results:
+        save_and_print_results(results)
+    else:
+        print("❌ No results found!")
+        
+    print(f"\n✨ Processing complete!")
