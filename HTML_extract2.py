@@ -39,81 +39,75 @@ def extract_strengths_weaknesses(html_file_path):
     current_section = None
     i = 0
     
-    print(f"\n🔍 PROCESSING ELEMENTS:")
+    print(f"\n🔍 PROCESSING ELEMENTS (SIMPLIFIED):")
     print("=" * 60)
     
     while i < len(all_p_elements):
         p = all_p_elements[i]
         text = p.get_text().strip()
+        style = p.get('style', '')
+        is_bold = 'font-weight' in style.lower() and 'bold' in style.lower()
         
-        print(f"\nProcessing P{i+1}: '{text}'")
+        print(f"\nP{i+1}: '{text}' | Bold: {is_bold}")
         
-        # Check if this is a section header
+        # Check if this is Strengths section
         if re.search(r'\bStrengths?\s*:?', text, re.IGNORECASE):
             current_section = 'strengths'
-            print(f"🎯 Found STRENGTHS section header")
+            print(f"🎯 STRENGTHS section started")
             i += 1
             continue
+            
+        # Check if this is Weaknesses section
         elif re.search(r'\bWeakness(es)?\s*:?', text, re.IGNORECASE):
             current_section = 'weaknesses'
-            print(f"🎯 Found WEAKNESSES section header")
+            print(f"🎯 WEAKNESSES section started")
             i += 1
             continue
         
-        # If we're in a section, look for key-value pairs
-        if current_section:
-            # Check if this element has bold styling (potential key)
-            style = p.get('style', '')
-            is_bold = 'font-weight' in style.lower() and 'bold' in style.lower()
+        # If we're in a section and this paragraph is BOLD = it's a KEY
+        if current_section and is_bold and text:
+            key = text.rstrip(':').strip()
+            print(f"🔑 KEY found: '{key}'")
             
-            if is_bold and text:  # This is a key
-                key = text.rstrip(':').strip()
-                print(f"🔑 Found KEY: '{key}' (bold)")
+            # Collect all NON-BOLD paragraphs after this until next BOLD or section change
+            value_parts = []
+            j = i + 1
+            
+            while j < len(all_p_elements):
+                next_p = all_p_elements[j]
+                next_text = next_p.get_text().strip()
+                next_style = next_p.get('style', '')
+                next_is_bold = 'font-weight' in next_style.lower() and 'bold' in next_style.lower()
                 
-                # Collect all following <p> elements until next bold or section change
-                value_parts = []
-                j = i + 1
+                # Stop if we hit BOLD (next key) or Strengths/Weaknesses header
+                if next_is_bold:
+                    print(f"   🛑 Stopped at BOLD paragraph")
+                    break
+                if re.search(r'\b(Strengths?|Weakness(es)?)\s*:?', next_text, re.IGNORECASE):
+                    print(f"   🛑 Stopped at section header")
+                    break
                 
-                print(f"   📝 Collecting value parts starting from P{j+1}:")
+                # Add this paragraph to value
+                if next_text:
+                    value_parts.append(next_text)
+                    print(f"   ➕ Value part: '{next_text[:30]}...'")
                 
-                while j < len(all_p_elements):
-                    next_p = all_p_elements[j]
-                    next_text = next_p.get_text().strip()
-                    next_style = next_p.get('style', '')
-                    next_is_bold = 'font-weight' in next_style.lower() and 'bold' in next_style.lower()
-                    
-                    # Check if this is a new section header
-                    is_section_header = (re.search(r'\bStrengths?\s*:?', next_text, re.IGNORECASE) or 
-                                       re.search(r'\bWeakness(es)?\s*:?', next_text, re.IGNORECASE))
-                    
-                    # Stop if we hit another bold element (next key) or section header
-                    if next_is_bold or is_section_header:
-                        print(f"   🛑 Stopped at P{j+1} (Bold: {next_is_bold}, Section: {is_section_header})")
-                        break
-                    
-                    if next_text:  # Only add non-empty text
-                        value_parts.append(next_text)
-                        print(f"   ➕ Added: '{next_text[:50]}...'")
-                    
-                    j += 1
+                j += 1
+            
+            # Save the key-value pair
+            if value_parts:
+                combined_value = ' '.join(value_parts)
                 
-                # Combine all value parts
-                if value_parts:
-                    combined_value = ' '.join(value_parts)
-                    print(f"💭 Combined VALUE: '{combined_value[:100]}...'")
-                    
-                    if current_section == 'strengths':
-                        strengths_dict[key] = combined_value
-                        print(f"✅ Added to STRENGTHS: {key} -> {combined_value[:50]}...")
-                    elif current_section == 'weaknesses':
-                        weaknesses_dict[key] = combined_value
-                        print(f"⚠️  Added to WEAKNESSES: {key} -> {combined_value[:50]}...")
-                else:
-                    print(f"❌ No value parts found for key: {key}")
-                
-                # Move to the next unprocessed element
-                i = j
-                continue
+                if current_section == 'strengths':
+                    strengths_dict[key] = combined_value
+                    print(f"✅ STRENGTH: {key} = {combined_value[:50]}...")
+                elif current_section == 'weaknesses':
+                    weaknesses_dict[key] = combined_value
+                    print(f"⚠️  WEAKNESS: {key} = {combined_value[:50]}...")
+            
+            # Jump to where we stopped
+            i = j
+            continue
         
         i += 1
     
