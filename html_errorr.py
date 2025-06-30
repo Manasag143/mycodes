@@ -1,151 +1,68 @@
-# FIX BLOCK 1: Investigate the target section structure
-if html_files and found_elements:
-    print(f"🔍 INVESTIGATING TARGET SECTION STRUCTURE")
-    print("="*50)
-    
-    target_section = found_elements[0].find_parent()
-    print(f"Target section tag: <{target_section.name}>")
-    
-    # Check all child elements
-    all_children = target_section.find_all()
-    print(f"Total child elements: {len(all_children)}")
-    
-    # Count different types of elements
-    element_types = {}
-    for child in all_children:
-        tag = child.name
-        element_types[tag] = element_types.get(tag, 0) + 1
-    
-    print(f"\nElement types found:")
-    for tag, count in element_types.items():
-        print(f"  <{tag}>: {count}")
+from bs4 import BeautifulSoup
+import re
+import os
+import json
 
-# FIX BLOCK 2: Look for any lists (ul/ol) in a wider search
-if html_files:
-    print(f"\n🔍 SEARCHING FOR LISTS IN ENTIRE DOCUMENT")
-    print("="*50)
+def extract_strengths_weaknesses(html_file_path):
+    """Extract strengths and weaknesses from a single HTML file."""
+    with open(html_file_path, 'r', encoding='utf-8') as file:
+        soup = BeautifulSoup(file.read(), 'html.parser')
     
-    # Find all ul and ol elements
-    all_ul = soup.find_all('ul')
-    all_ol = soup.find_all('ol')
-    
-    print(f"Found {len(all_ul)} <ul> elements")
-    print(f"Found {len(all_ol)} <ol> elements")
-    
-    # Check content around these lists
-    for i, ul in enumerate(all_ul):
-        print(f"\n📋 UL #{i+1}:")
-        
-        # Check previous elements for context
-        prev_elements = []
-        current = ul
-        for _ in range(3):  # Check 3 previous elements
-            current = current.find_previous(['p', 'span', 'div', 'td'])
-            if current:
-                text = current.get_text().strip()
-                if text and len(text) < 200:  # Only show short texts
-                    prev_elements.append(text)
-        
-        print(f"  Context: {' | '.join(prev_elements)}")
-        
-        # Show first few list items
-        li_items = ul.find_all('li', recursive=False)
-        print(f"  List items: {len(li_items)}")
-        for j, li in enumerate(li_items[:2]):  # Show first 2
-            text = li.get_text().strip()
-            print(f"    {j+1}. {text[:100]}...")
-
-# FIX BLOCK 3: Search for Strengths/Weaknesses text in any element
-if html_files:
-    print(f"\n🔍 SEARCHING FOR STRENGTHS/WEAKNESSES TEXT")
-    print("="*50)
-    
-    strengths_elements = []
-    weaknesses_elements = []
-    
-    # Search in all elements
-    for element in soup.find_all():
-        text = element.get_text()
-        
-        if re.search(r'\bStrengths?\s*:', text, re.IGNORECASE):
-            strengths_elements.append(element)
-            print(f"✅ STRENGTHS found in <{element.name}>: {text[:100]}...")
-        
-        if re.search(r'\bWeakness(es)?\s*:', text, re.IGNORECASE):
-            weaknesses_elements.append(element)
-            print(f"✅ WEAKNESSES found in <{element.name}>: {text[:100]}...")
-    
-    print(f"\nTotal Strengths elements: {len(strengths_elements)}")
-    print(f"Total Weaknesses elements: {len(weaknesses_elements)}")
-
-# FIX BLOCK 4: Check if content is in paragraphs instead of lists
-if html_files and strengths_elements:
-    print(f"\n🔍 CHECKING PARAGRAPH STRUCTURE")
-    print("="*50)
-    
-    # Take first strengths element and check its siblings
-    first_strength = strengths_elements[0]
-    parent = first_strength.find_parent()
-    
-    print(f"Strengths parent: <{parent.name}>")
-    
-    # Get all siblings after the strengths element
-    all_siblings = []
-    current = first_strength
-    for _ in range(10):  # Check next 10 elements
-        current = current.find_next_sibling()
-        if current:
-            all_siblings.append(current)
-        else:
+    # Find the "Key Rating Drivers" section
+    target_section = None
+    for element in soup.find_all(['p', 'span']):
+        if 'Key Rating Drivers' in element.get_text():
+            target_section = element.find_parent()
             break
     
-    print(f"Found {len(all_siblings)} sibling elements")
-    
-    for i, sibling in enumerate(all_siblings):
-        text = sibling.get_text().strip()
-        if text:
-            print(f"{i+1}. <{sibling.name}>: {text[:100]}...")
-            
-            # Check for bold text
-            bold_elements = sibling.find_all(['strong', 'b'])
-            if bold_elements:
-                print(f"   💪 Bold text: {bold_elements[0].get_text()}")
-
-# FIX BLOCK 5: Alternative extraction method based on what we find
-def extract_from_paragraphs(soup):
-    """Try extracting from paragraph structure instead of lists."""
-    print(f"\n🔧 TRYING PARAGRAPH-BASED EXTRACTION")
-    print("="*50)
+    if not target_section:
+        return {}, {}
     
     strengths_dict = {}
     weaknesses_dict = {}
     current_section = None
     
-    # Find all paragraphs
-    all_paragraphs = soup.find_all('p')
+    # Get all text elements after finding the target section
+    all_elements = target_section.find_all(['p', 'ul', 'li'])
     
-    for p in all_paragraphs:
-        text = p.get_text().strip()
+    for element in all_elements:
+        text = element.get_text().strip()
         
-        # Check for section headers
-        if re.search(r'\bStrengths?\s*:', text, re.IGNORECASE):
-            current_section = 'strengths'
-            print(f"✅ Found Strengths section")
-            continue
-        elif re.search(r'\bWeakness(es)?\s*:', text, re.IGNORECASE):
-            current_section = 'weaknesses'
-            print(f"✅ Found Weaknesses section")
-            continue
+        # Check for section headers in paragraphs
+        if element.name == 'p':
+            if re.search(r'\bStrengths?\s*:', text, re.IGNORECASE):
+                current_section = 'strengths'
+                continue
+            elif re.search(r'\bWeakness(es)?\s*:', text, re.IGNORECASE):
+                current_section = 'weaknesses'
+                continue
         
-        # Extract content if we're in a section
-        if current_section and text:
-            bold_element = p.find(['strong', 'b'])
-            if bold_element:
-                key = bold_element.get_text().strip().rstrip(':')
-                value = text.replace(bold_element.get_text().strip(), '', 1).strip().lstrip(':').strip()
+        # Process list items
+        if element.name == 'li' and current_section:
+            # Find bold elements (strong or b tags)
+            bold_elements = element.find_all(['strong', 'b'])
+            
+            if bold_elements:
+                # Get the first bold element as the key
+                key_element = bold_elements[0]
+                key = key_element.get_text().strip().rstrip(':')
                 
-                print(f"📝 Found: {key}")
+                # Get the full text and remove the key part to get the value
+                full_text = element.get_text().strip()
                 
+                # Find the position where the key ends and extract the value
+                key_text = key_element.get_text().strip()
+                if key_text in full_text:
+                    # Split at the key and take everything after
+                    parts = full_text.split(key_text, 1)
+                    if len(parts) > 1:
+                        value = parts[1].strip().lstrip(':').strip()
+                    else:
+                        value = ""
+                else:
+                    value = full_text.replace(key_text, '', 1).strip().lstrip(':').strip()
+                
+                # Store in appropriate dictionary
                 if current_section == 'strengths':
                     strengths_dict[key] = value
                 elif current_section == 'weaknesses':
@@ -153,116 +70,161 @@ def extract_from_paragraphs(soup):
     
     return strengths_dict, weaknesses_dict
 
-# FIX BLOCK 6: Test the paragraph-based extraction
-if html_files:
-    strengths, weaknesses = extract_from_paragraphs(soup)
+def extract_from_html_content(html_content):
+    """Extract strengths and weaknesses from HTML content string."""
+    soup = BeautifulSoup(html_content, 'html.parser')
     
-    print(f"\n📊 PARAGRAPH EXTRACTION RESULTS:")
-    print(f"Strengths: {len(strengths)}")
-    print(f"Weaknesses: {len(weaknesses)}")
+    # Find the "Key Rating Drivers" section
+    target_section = None
+    for element in soup.find_all(['p', 'span']):
+        if 'Key Rating Drivers' in element.get_text():
+            target_section = element.find_parent()
+            break
     
-    if strengths:
-        print(f"\n💪 STRENGTHS:")
-        for key, value in strengths.items():
-            print(f"  • {key}: {value[:100]}...")
-    
-    if weaknesses:
-        print(f"\n⚡ WEAKNESSES:")
-        for key, value in weaknesses.items():
-            print(f"  • {key}: {value[:100]}...")
-
-# FIX BLOCK 7: Create corrected extraction function
-def corrected_extract_strengths_weaknesses(html_file_path):
-    """Corrected extraction function based on actual HTML structure."""
-    with open(html_file_path, 'r', encoding='utf-8') as file:
-        soup = BeautifulSoup(file.read(), 'html.parser')
+    if not target_section:
+        return {}, {}
     
     strengths_dict = {}
     weaknesses_dict = {}
     current_section = None
     
-    # Method 1: Try list-based extraction
-    all_lists = soup.find_all('ul')
-    for ul in all_lists:
-        # Check if this list is in strengths/weaknesses context
-        context = ""
-        prev = ul.find_previous(['p', 'span', 'div'])
-        if prev:
-            context = prev.get_text().lower()
-        
-        if 'strength' in context or 'weakness' in context:
-            for li in ul.find_all('li'):
-                text = li.get_text().strip()
-                
-                if re.search(r'\bStrengths?\s*:', text, re.IGNORECASE):
-                    current_section = 'strengths'
-                    continue
-                elif re.search(r'\bWeakness(es)?\s*:', text, re.IGNORECASE):
-                    current_section = 'weaknesses'
-                    continue
-                
-                if current_section:
-                    bold_element = li.find(['strong', 'b'])
-                    if bold_element:
-                        key = bold_element.get_text().strip().rstrip(':')
-                        value = text.replace(bold_element.get_text().strip(), '', 1).strip().lstrip(':').strip()
-                        
-                        if current_section == 'strengths':
-                            strengths_dict[key] = value
-                        elif current_section == 'weaknesses':
-                            weaknesses_dict[key] = value
+    # Get all text elements after finding the target section
+    all_elements = target_section.find_all(['p', 'ul', 'li'])
     
-    # Method 2: If lists didn't work, try paragraphs
-    if not strengths_dict and not weaknesses_dict:
-        current_section = None
-        for element in soup.find_all(['p', 'div']):
-            text = element.get_text().strip()
-            
+    for element in all_elements:
+        text = element.get_text().strip()
+        
+        # Check for section headers in paragraphs
+        if element.name == 'p':
             if re.search(r'\bStrengths?\s*:', text, re.IGNORECASE):
                 current_section = 'strengths'
                 continue
             elif re.search(r'\bWeakness(es)?\s*:', text, re.IGNORECASE):
                 current_section = 'weaknesses'
                 continue
+        
+        # Process list items
+        if element.name == 'li' and current_section:
+            # Find bold elements (strong or b tags)
+            bold_elements = element.find_all(['strong', 'b'])
             
-            if current_section and text:
-                bold_element = element.find(['strong', 'b'])
-                if bold_element:
-                    key = bold_element.get_text().strip().rstrip(':')
-                    value = text.replace(bold_element.get_text().strip(), '', 1).strip().lstrip(':').strip()
-                    
-                    if current_section == 'strengths':
-                        strengths_dict[key] = value
-                    elif current_section == 'weaknesses':
-                        weaknesses_dict[key] = value
+            if bold_elements:
+                # Get the first bold element as the key
+                key_element = bold_elements[0]
+                key = key_element.get_text().strip().rstrip(':')
+                
+                # Get the full text and remove the key part to get the value
+                full_text = element.get_text().strip()
+                
+                # Find the position where the key ends and extract the value
+                key_text = key_element.get_text().strip()
+                if key_text in full_text:
+                    # Split at the key and take everything after
+                    parts = full_text.split(key_text, 1)
+                    if len(parts) > 1:
+                        value = parts[1].strip().lstrip(':').strip()
+                    else:
+                        value = ""
+                else:
+                    value = full_text.replace(key_text, '', 1).strip().lstrip(':').strip()
+                
+                # Store in appropriate dictionary
+                if current_section == 'strengths':
+                    strengths_dict[key] = value
+                elif current_section == 'weaknesses':
+                    weaknesses_dict[key] = value
     
     return strengths_dict, weaknesses_dict
 
-# FIX BLOCK 8: Test the corrected function
-if html_files:
-    print(f"\n{'='*60}")
-    print(f"TESTING CORRECTED EXTRACTION FUNCTION")
-    print(f"{'='*60}")
+def process_folder(folder_path='.'):
+    """Process all HTML files in a folder."""
+    all_results = {}
     
-    test_file = html_files[0]
-    file_path = os.path.join(folder_path, test_file)
+    # Find all HTML files
+    html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
     
-    final_strengths, final_weaknesses = corrected_extract_strengths_weaknesses(file_path)
+    print(f"Found {len(html_files)} HTML files")
     
-    print(f"\n📊 FINAL RESULTS:")
-    print(f"✅ Strengths: {len(final_strengths)}")
-    print(f"✅ Weaknesses: {len(final_weaknesses)}")
+    # Process each file
+    for filename in html_files:
+        file_path = os.path.join(folder_path, filename)
+        try:
+            print(f"Processing: {filename}")
+            strengths, weaknesses = extract_strengths_weaknesses(file_path)
+            
+            file_key = filename.replace('.html', '').replace('.htm', '')
+            all_results[file_key] = {
+                'strengths': strengths,
+                'weaknesses': weaknesses
+            }
+            
+        except Exception as e:
+            print(f"Error with {filename}: {e}")
     
-    if final_strengths:
-        print(f"\n💪 STRENGTHS:")
-        for key, value in final_strengths.items():
-            print(f"  • {key}")
-            print(f"    {value[:150]}...")
-            print()
+    return all_results
+
+def save_and_print_results(results):
+    """Save to JSON and print summary."""
+    # Save to JSON
+    with open('extracted_results.json', 'w', encoding='utf-8') as f:
+        json.dump(results, f, indent=2, ensure_ascii=False)
     
-    if final_weaknesses:
-        print(f"\n⚡ WEAKNESSES:")
-        for key, value in final_weaknesses.items():
-            print(f"  • {key}")
-            print(f"    {value[:150]}...")
-            print()
+    # Print summary
+    print(f"\n{'='*50}")
+    print("RESULTS SUMMARY")
+    print(f"{'='*50}")
+    
+    for filename, data in results.items():
+        print(f"\n📄 {filename}:")
+        print(f"   ✅ Strengths: {len(data['strengths'])}")
+        print(f"   ⚠️  Weaknesses: {len(data['weaknesses'])}")
+        
+        # Print actual content
+        print("\n   STRENGTHS:")
+        for key, value in data['strengths'].items():
+            print(f"   💪 {key}: {value[:100]}...")
+        
+        print("\n   WEAKNESSES:")
+        for key, value in data['weaknesses'].items():
+            print(f"   ⚡ {key}: {value[:100]}...")
+    
+    print(f"\n💾 Full results saved to 'extracted_results.json'")
+
+# Example usage with the provided HTML content
+def demo_with_provided_html():
+    """Demo function to show how it works with your HTML content."""
+    # Your HTML content would go here
+    html_content = """
+    <!-- Your HTML content here -->
+    """
+    
+    strengths, weaknesses = extract_from_html_content(html_content)
+    
+    print("EXTRACTED STRENGTHS:")
+    for key, value in strengths.items():
+        print(f"Key: {key}")
+        print(f"Value: {value}")
+        print("-" * 50)
+    
+    print("\nEXTRACTED WEAKNESSES:")
+    for key, value in weaknesses.items():
+        print(f"Key: {key}")
+        print(f"Value: {value}")
+        print("-" * 50)
+    
+    return {'strengths': strengths, 'weaknesses': weaknesses}
+
+# Main execution
+if __name__ == "__main__":
+    folder_path = '.'  # Current folder - change this to your folder path
+    
+    print("🔍 Processing all HTML files in folder...")
+    results = process_folder(folder_path)
+    
+    if results:
+        save_and_print_results(results)
+    else:
+        print("❌ No HTML files found or processed successfully!")
+        
+    # Uncomment to test with specific HTML content
+    # demo_with_provided_html()
