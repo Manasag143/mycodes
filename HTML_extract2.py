@@ -70,30 +70,50 @@ def extract_strengths_weaknesses(html_file_path):
                 key = text.rstrip(':').strip()
                 print(f"🔑 Found KEY: '{key}' (bold)")
                 
-                # Look for the next <p> element as the value
-                if i + 1 < len(all_p_elements):
-                    next_p = all_p_elements[i + 1]
-                    value_text = next_p.get_text().strip()
+                # Collect all following <p> elements until next bold or section change
+                value_parts = []
+                j = i + 1
+                
+                print(f"   📝 Collecting value parts starting from P{j+1}:")
+                
+                while j < len(all_p_elements):
+                    next_p = all_p_elements[j]
+                    next_text = next_p.get_text().strip()
                     next_style = next_p.get('style', '')
                     next_is_bold = 'font-weight' in next_style.lower() and 'bold' in next_style.lower()
                     
-                    # Only use as value if it's not bold (not another key)
-                    if not next_is_bold and value_text:
-                        print(f"💭 Found VALUE: '{value_text}'")
-                        
-                        if current_section == 'strengths':
-                            strengths_dict[key] = value_text
-                            print(f"✅ Added to STRENGTHS: {key} -> {value_text}")
-                        elif current_section == 'weaknesses':
-                            weaknesses_dict[key] = value_text
-                            print(f"⚠️  Added to WEAKNESSES: {key} -> {value_text}")
-                        
-                        i += 2  # Skip both key and value
-                        continue
-                    else:
-                        print(f"❌ Next element is not a valid value (bold: {next_is_bold})")
+                    # Check if this is a new section header
+                    is_section_header = (re.search(r'\bStrengths?\s*:?', next_text, re.IGNORECASE) or 
+                                       re.search(r'\bWeakness(es)?\s*:?', next_text, re.IGNORECASE))
+                    
+                    # Stop if we hit another bold element (next key) or section header
+                    if next_is_bold or is_section_header:
+                        print(f"   🛑 Stopped at P{j+1} (Bold: {next_is_bold}, Section: {is_section_header})")
+                        break
+                    
+                    if next_text:  # Only add non-empty text
+                        value_parts.append(next_text)
+                        print(f"   ➕ Added: '{next_text[:50]}...'")
+                    
+                    j += 1
+                
+                # Combine all value parts
+                if value_parts:
+                    combined_value = ' '.join(value_parts)
+                    print(f"💭 Combined VALUE: '{combined_value[:100]}...'")
+                    
+                    if current_section == 'strengths':
+                        strengths_dict[key] = combined_value
+                        print(f"✅ Added to STRENGTHS: {key} -> {combined_value[:50]}...")
+                    elif current_section == 'weaknesses':
+                        weaknesses_dict[key] = combined_value
+                        print(f"⚠️  Added to WEAKNESSES: {key} -> {combined_value[:50]}...")
                 else:
-                    print(f"❌ No next element found for value")
+                    print(f"❌ No value parts found for key: {key}")
+                
+                # Move to the next unprocessed element
+                i = j
+                continue
         
         i += 1
     
