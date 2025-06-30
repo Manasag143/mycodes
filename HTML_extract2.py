@@ -21,112 +21,92 @@ def extract_strengths_weaknesses(html_file_path):
     
     print(f"✅ Found target section")
     
-    # Get all text from the target section
-    full_text = target_section.get_text()
-    print(f"\n📄 FULL TEXT FROM TARGET SECTION:")
+    # Get all <p> elements in order
+    all_p_elements = target_section.find_all('p')
+    print(f"\n📄 Found {len(all_p_elements)} <p> elements")
+    
+    # Print all p elements for debugging
+    print("\n🔍 ALL <p> ELEMENTS:")
     print("=" * 60)
-    print(full_text)
-    print("=" * 60)
+    for i, p in enumerate(all_p_elements):
+        text = p.get_text().strip()
+        style = p.get('style', '')
+        is_bold = 'font-weight' in style.lower() and 'bold' in style.lower()
+        print(f"P{i+1}: '{text}' | Style: '{style}' | Bold: {is_bold}")
     
-    # Find all elements with font-weight: bold CSS style
-    all_bold_elements = []
-    
-    # Look for elements with style="font-weight: bold" or style containing "font-weight:bold"
-    for element in target_section.find_all():
-        style = element.get('style', '')
-        if style and 'font-weight' in style.lower():
-            if 'bold' in style.lower():
-                all_bold_elements.append(element)
-    
-    print(f"\n💪 ELEMENTS WITH font-weight: bold FOUND: {len(all_bold_elements)}")
-    print("=" * 60)
-    
-    for i, bold in enumerate(all_bold_elements):
-        bold_text = bold.get_text().strip()
-        style = bold.get('style', '')
-        print(f"{i+1}. Bold text: '{bold_text}'")
-        print(f"    Style: {style}")
-        print(f"    Tag: <{bold.name}>")
-        print()
-    
-    # Now let's look for Strengths and Weaknesses sections in the text
-    print(f"\n🔍 LOOKING FOR STRENGTHS AND WEAKNESSES SECTIONS:")
-    print("=" * 60)
-    
-    # Split text by lines to analyze
-    lines = full_text.split('\n')
+    strengths_dict = {}
+    weaknesses_dict = {}
     current_section = None
+    i = 0
     
-    print("All lines from target section:")
-    for i, line in enumerate(lines):
-        line = line.strip()
-        if line:  # Only print non-empty lines
-            print(f"Line {i+1}: '{line}'")
+    print(f"\n🔍 PROCESSING ELEMENTS:")
+    print("=" * 60)
+    
+    while i < len(all_p_elements):
+        p = all_p_elements[i]
+        text = p.get_text().strip()
+        
+        print(f"\nProcessing P{i+1}: '{text}'")
+        
+        # Check if this is a section header
+        if re.search(r'\bStrengths?\s*:?', text, re.IGNORECASE):
+            current_section = 'strengths'
+            print(f"🎯 Found STRENGTHS section header")
+            i += 1
+            continue
+        elif re.search(r'\bWeakness(es)?\s*:?', text, re.IGNORECASE):
+            current_section = 'weaknesses'
+            print(f"🎯 Found WEAKNESSES section header")
+            i += 1
+            continue
+        
+        # If we're in a section, look for key-value pairs
+        if current_section:
+            # Check if this element has bold styling (potential key)
+            style = p.get('style', '')
+            is_bold = 'font-weight' in style.lower() and 'bold' in style.lower()
             
-            # Check if this line contains Strengths or Weaknesses
-            if re.search(r'\bStrengths?\s*:?', line, re.IGNORECASE):
-                current_section = 'strengths'
-                print(f"    🎯 FOUND STRENGTHS SECTION!")
-            elif re.search(r'\bWeakness(es)?\s*:?', line, re.IGNORECASE):
-                current_section = 'weaknesses'
-                print(f"    🎯 FOUND WEAKNESSES SECTION!")
-            elif current_section:
-                print(f"    📍 In {current_section} section")
-    
-    # Alternative approach: Find all elements that contain bold text (with CSS styling)
-    print(f"\n🔍 ELEMENTS WITH font-weight: bold STYLING:")
-    print("=" * 60)
-    
-    # Find all elements with font-weight bold styling
-    elements_with_bold = []
-    for element in target_section.find_all():
-        style = element.get('style', '')
-        if 'font-weight' in style.lower() and 'bold' in style.lower():
-            elements_with_bold.append(element)
-    
-    print(f"Found {len(elements_with_bold)} elements with font-weight: bold:")
-    for i, elem in enumerate(elements_with_bold):
-        print(f"\nElement {i+1}:")
-        print(f"  Tag: <{elem.name}>")
-        print(f"  Style: {elem.get('style', 'No style')}")
-        print(f"  Full text: '{elem.get_text().strip()}'")
+            if is_bold and text:  # This is a key
+                key = text.rstrip(':').strip()
+                print(f"🔑 Found KEY: '{key}' (bold)")
+                
+                # Look for the next <p> element as the value
+                if i + 1 < len(all_p_elements):
+                    next_p = all_p_elements[i + 1]
+                    value_text = next_p.get_text().strip()
+                    next_style = next_p.get('style', '')
+                    next_is_bold = 'font-weight' in next_style.lower() and 'bold' in next_style.lower()
+                    
+                    # Only use as value if it's not bold (not another key)
+                    if not next_is_bold and value_text:
+                        print(f"💭 Found VALUE: '{value_text}'")
+                        
+                        if current_section == 'strengths':
+                            strengths_dict[key] = value_text
+                            print(f"✅ Added to STRENGTHS: {key} -> {value_text}")
+                        elif current_section == 'weaknesses':
+                            weaknesses_dict[key] = value_text
+                            print(f"⚠️  Added to WEAKNESSES: {key} -> {value_text}")
+                        
+                        i += 2  # Skip both key and value
+                        continue
+                    else:
+                        print(f"❌ Next element is not a valid value (bold: {next_is_bold})")
+                else:
+                    print(f"❌ No next element found for value")
         
-        # Check if parent has any context about strengths/weaknesses
-        parent = elem.parent
-        if parent:
-            parent_text = parent.get_text().strip()
-            print(f"  Parent text: '{parent_text[:100]}...'")
+        i += 1
     
-    # Also check for any CSS classes that might indicate bold text
-    print(f"\n🔍 CHECKING FOR CSS CLASSES THAT MIGHT INDICATE BOLD:")
-    print("=" * 60)
+    print(f"\n🎯 FINAL RESULTS:")
+    print(f"📈 Strengths found: {len(strengths_dict)}")
+    for key, value in strengths_dict.items():
+        print(f"   💪 {key}: {value[:50]}...")
     
-    potential_bold_classes = ['bold', 'strong', 'weight-bold', 'font-bold', 'fw-bold']
-    for class_name in potential_bold_classes:
-        elements = target_section.find_all(class_=class_name)
-        if elements:
-            print(f"Found {len(elements)} elements with class '{class_name}':")
-            for elem in elements:
-                print(f"  Text: '{elem.get_text().strip()}'")
+    print(f"📉 Weaknesses found: {len(weaknesses_dict)}")
+    for key, value in weaknesses_dict.items():
+        print(f"   ⚡ {key}: {value[:50]}...")
     
-    # Let's also search for common patterns in the text
-    print(f"\n🔍 SEARCHING ALL ELEMENTS FOR PATTERN MATCHING:")
-    print("=" * 60)
-    
-    all_elements = target_section.find_all()
-    for i, elem in enumerate(all_elements):
-        text = elem.get_text().strip()
-        style = elem.get('style', '')
-        
-        # Look for elements that might be keys (ending with colon)
-        if text and ':' in text and len(text) < 100:  # Likely a key if short and has colon
-            print(f"Potential key element {i+1}:")
-            print(f"  Tag: <{elem.name}>")
-            print(f"  Text: '{text}'")
-            print(f"  Style: '{style}'")
-            print()
-    
-    return {}, {}
+    return strengths_dict, weaknesses_dict
 
 def process_folder(folder_path='.'):
     """Process all HTML files in a folder."""
@@ -162,6 +142,23 @@ def save_and_print_results(results):
     # Save to JSON
     with open('extracted_results.json', 'w', encoding='utf-8') as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
+    
+    # Print summary
+    print(f"\n{'='*50}")
+    print("RESULTS SUMMARY")
+    print(f"{'='*50}")
+    
+    for filename, data in results.items():
+        print(f"\n📄 {filename}:")
+        print(f"   ✅ Strengths: {len(data['strengths'])}")
+        print(f"   ⚠️  Weaknesses: {len(data['weaknesses'])}")
+        
+        # Print actual content
+        for key, value in data['strengths'].items():
+            print(f"   💪 {key}: {value[:100]}...")
+        
+        for key, value in data['weaknesses'].items():
+            print(f"   ⚡ {key}: {value[:100]}...")
     
     print(f"\n💾 Full results saved to 'extracted_results.json'")
 
