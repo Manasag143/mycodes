@@ -19,75 +19,70 @@ def extract_strengths_weaknesses(html_file_path):
         print("❌ No 'Key Rating Drivers' section found!")
         return {}, {}
     
-    print(f"✅ Found target section: {target_section.name}")
+    print(f"✅ Found target section")
     
-    strengths_dict = {}
-    weaknesses_dict = {}
+    # Get all text from the target section
+    full_text = target_section.get_text()
+    print(f"\n📄 FULL TEXT FROM TARGET SECTION:")
+    print("=" * 60)
+    print(full_text)
+    print("=" * 60)
+    
+    # Find all bold elements in the entire target section
+    all_bold_elements = target_section.find_all(['strong', 'b'])
+    print(f"\n💪 ALL BOLD ELEMENTS FOUND: {len(all_bold_elements)}")
+    print("=" * 60)
+    
+    for i, bold in enumerate(all_bold_elements):
+        bold_text = bold.get_text().strip()
+        print(f"{i+1}. Bold text: '{bold_text}'")
+    
+    # Now let's look for Strengths and Weaknesses sections in the text
+    print(f"\n🔍 LOOKING FOR STRENGTHS AND WEAKNESSES SECTIONS:")
+    print("=" * 60)
+    
+    # Split text by lines to analyze
+    lines = full_text.split('\n')
     current_section = None
     
-    # Find all li elements and print count
-    all_li_elements = target_section.find_all('li')
-    print(f"📋 Found {len(all_li_elements)} <li> elements in target section")
+    print("All lines from target section:")
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if line:  # Only print non-empty lines
+            print(f"Line {i+1}: '{line}'")
+            
+            # Check if this line contains Strengths or Weaknesses
+            if re.search(r'\bStrengths?\s*:?', line, re.IGNORECASE):
+                current_section = 'strengths'
+                print(f"    🎯 FOUND STRENGTHS SECTION!")
+            elif re.search(r'\bWeakness(es)?\s*:?', line, re.IGNORECASE):
+                current_section = 'weaknesses'
+                print(f"    🎯 FOUND WEAKNESSES SECTION!")
+            elif current_section:
+                print(f"    📍 In {current_section} section")
     
-    # Process all list items
-    for i, li in enumerate(all_li_elements):
-        text = li.get_text().strip()
-        
-        print(f"\n--- Processing <li> #{i+1} ---")
-        print(f"Raw HTML: {li}")
-        print(f"Text content: '{text}'")
-        
-        # Skip empty items
-        if not text:
-            print("⏭️  Skipping empty item")
-            continue
-        
-        # Check for section headers (these items identify the section)
-        if re.search(r'\bStrengths?\s*:?', text, re.IGNORECASE):
-            current_section = 'strengths'
-            print(f"🏷️  Found STRENGTHS section header")
-            continue
-        elif re.search(r'\bWeakness(es)?\s*:?', text, re.IGNORECASE):
-            current_section = 'weaknesses'
-            print(f"🏷️  Found WEAKNESSES section header")
-            continue
-        
-        print(f"📍 Current section: {current_section}")
-        
-        # Extract bold text as key and remaining content as value
-        if current_section:
-            bold_element = li.find(['strong', 'b'])
-            if bold_element:
-                print(f"🔍 Found bold element: {bold_element}")
-                
-                # Get the bold text as key (remove colons if present)
-                key = bold_element.get_text().strip().rstrip(':')
-                print(f"🔑 Extracted key: '{key}'")
-                
-                # Get the remaining text as value
-                # Remove the bold text from the full text
-                value = text.replace(bold_element.get_text().strip(), '', 1).strip()
-                # Clean up any leading colons or whitespace
-                value = value.lstrip(':').strip()
-                print(f"💭 Extracted value: '{value}'")
-                
-                # Add to appropriate dictionary based on current section
-                if current_section == 'strengths':
-                    strengths_dict[key] = value
-                    print(f"✅ Added to STRENGTHS: {key} -> {value}")
-                elif current_section == 'weaknesses':
-                    weaknesses_dict[key] = value
-                    print(f"⚠️  Added to WEAKNESSES: {key} -> {value}")
-            else:
-                print(f"❌ No bold element found in this <li>")
-        else:
-            print(f"❓ No current section set - skipping this item")
+    # Alternative approach: Find all elements that contain bold text
+    print(f"\n🔍 ELEMENTS CONTAINING BOLD TEXT:")
+    print("=" * 60)
     
-    print(f"\n🎯 Final Results:")
-    print(f"📈 Strengths found: {len(strengths_dict)}")
-    print(f"📉 Weaknesses found: {len(weaknesses_dict)}")
+    # Find all elements that have bold children
+    elements_with_bold = []
+    for element in target_section.find_all():
+        if element.find(['strong', 'b']):
+            elements_with_bold.append(element)
     
-    return strengths_dict, weaknesses_dict
+    print(f"Found {len(elements_with_bold)} elements containing bold text:")
+    for i, elem in enumerate(elements_with_bold):
+        print(f"\nElement {i+1}:")
+        print(f"  Tag: <{elem.name}>")
+        print(f"  Full text: '{elem.get_text().strip()}'")
+        
+        # Find bold elements within this element
+        bold_in_elem = elem.find_all(['strong', 'b'])
+        for j, bold in enumerate(bold_in_elem):
+            print(f"    Bold {j+1}: '{bold.get_text().strip()}'")
+    
+    return {}, {}
 
 def process_folder(folder_path='.'):
     """Process all HTML files in a folder."""
@@ -102,7 +97,9 @@ def process_folder(folder_path='.'):
     for filename in html_files:
         file_path = os.path.join(folder_path, filename)
         try:
-            print(f"Processing: {filename}")
+            print(f"\n{'='*80}")
+            print(f"🔍 Processing: {filename}")
+            print(f"{'='*80}")
             strengths, weaknesses = extract_strengths_weaknesses(file_path)
             
             file_key = filename.replace('.html', '').replace('.htm', '')
@@ -121,23 +118,6 @@ def save_and_print_results(results):
     # Save to JSON
     with open('extracted_results.json', 'w', encoding='utf-8') as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
-    
-    # Print summary
-    print(f"\n{'='*50}")
-    print("RESULTS SUMMARY")
-    print(f"{'='*50}")
-    
-    for filename, data in results.items():
-        print(f"\n📄 {filename}:")
-        print(f"   ✅ Strengths: {len(data['strengths'])}")
-        print(f"   ⚠️  Weaknesses: {len(data['weaknesses'])}")
-        
-        # Print actual content
-        for key, value in data['strengths'].items():
-            print(f"   💪 {key}: {value[:100]}...")
-        
-        for key, value in data['weaknesses'].items():
-            print(f"   ⚡ {key}: {value[:100]}...")
     
     print(f"\n💾 Full results saved to 'extracted_results.json'")
 
