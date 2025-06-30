@@ -56,20 +56,9 @@ def extract_from_soup(soup):
     strengths_dict = {}
     weaknesses_dict = {}
     current_section = None
-    current_key = None
-    current_values = []
     
     # Get all elements in the target section (paragraphs, lists, list items)
     all_elements = target_section.find_all(['p', 'ul', 'li'])
-    
-    def save_current_entry():
-        """Save current key-value pair to appropriate dictionary."""
-        if current_key and current_values and current_section:
-            combined_value = ' '.join(current_values).strip()
-            if current_section == 'strengths':
-                strengths_dict[current_key] = combined_value
-            elif current_section == 'weaknesses':
-                weaknesses_dict[current_key] = combined_value
     
     for element in all_elements:
         text = element.get_text().strip()
@@ -80,108 +69,77 @@ def extract_from_soup(soup):
         
         # Check if this is a section header (Strengths/Weaknesses)
         if element.name == 'p':
-            if re.search(r'\bStrengths?\s*:', text, re.IGNORECASE):
-                # Save previous entry before switching sections
-                save_current_entry()
+            if re.search(r'\bStrengths?\s*:?', text, re.IGNORECASE):
                 current_section = 'strengths'
-                current_key = None
-                current_values = []
                 continue
-            elif re.search(r'\bWeakness(es)?\s*:', text, re.IGNORECASE):
-                # Save previous entry before switching sections
-                save_current_entry()
+            elif re.search(r'\bWeakness(es)?\s*:?', text, re.IGNORECASE):
                 current_section = 'weaknesses'
-                current_key = None
-                current_values = []
                 continue
         
         # Process list items within a section
         if element.name == 'li' and current_section:
-            # Look for bold elements within this list item
-            bold_elements = []
-            
-            # Find all spans with bold styling
+            # Find all spans in this list item
             spans = element.find_all('span')
+            bold_spans = []
+            regular_spans = []
+            
             for span in spans:
                 if is_bold_element(span):
-                    bold_elements.append(span)
-            
-            # Also check for strong/b tags
-            bold_tags = element.find_all(['strong', 'b'])
-            bold_elements.extend(bold_tags)
-            
-            if bold_elements:
-                # Save previous entry before starting new key
-                save_current_entry()
-                
-                # Get the first bold element as the key
-                key_element = bold_elements[0]
-                current_key = key_element.get_text().strip().rstrip(':')
-                
-                # Get the full text and remove the key part to get the initial value
-                full_text = element.get_text().strip()
-                key_text = key_element.get_text().strip()
-                
-                # Remove the key from the full text to get the value
-                if key_text in full_text:
-                    value = full_text.replace(key_text, '', 1).strip()
-                    # Remove leading colon if present
-                    value = value.lstrip(':').strip()
-                    if value:  # Only add if there's content
-                        current_values = [value]
-                    else:
-                        current_values = []
+                    bold_spans.append(span)
                 else:
-                    current_values = []
-            else:
-                # This is additional content for the current key
-                if current_key:
-                    current_values.append(text)
-        
-        # Handle paragraphs that might contain additional content for current key
-        elif element.name == 'p' and current_section and current_key:
-            # Check if this paragraph contains bold elements (new key)
-            bold_elements = []
+                    regular_spans.append(span)
             
-            # Find bold spans
-            spans = element.find_all('span')
-            for span in spans:
-                if is_bold_element(span):
-                    bold_elements.append(span)
-            
-            # Find bold tags
-            bold_tags = element.find_all(['strong', 'b'])
-            bold_elements.extend(bold_tags)
-            
-            if bold_elements:
-                # Save previous entry before starting new key
-                save_current_entry()
+            if bold_spans:
+                # The first bold span should be the key
+                # Check if it ends with ':' or if the next bold span is ':'
+                key_text = ""
+                value_spans = []
                 
-                # Get the first bold element as the key
-                key_element = bold_elements[0]
-                current_key = key_element.get_text().strip().rstrip(':')
-                
-                # Get the full text and remove the key part to get the initial value
-                full_text = element.get_text().strip()
-                key_text = key_element.get_text().strip()
-                
-                # Remove the key from the full text to get the value
-                if key_text in full_text:
-                    value = full_text.replace(key_text, '', 1).strip()
-                    # Remove leading colon if present
-                    value = value.lstrip(':').strip()
-                    if value:  # Only add if there's content
-                        current_values = [value]
+                # Build the key from bold spans
+                for i, bold_span in enumerate(bold_spans):
+                    span_text = bold_span.get_text().strip()
+                    if span_text == ':' and i > 0:
+                        # This is just a colon separator, don't add to key
+                        break
+                    elif span_text.endswith(':'):
+                        # Key ends here
+                        key_text += span_text.rstrip(':')
+                        break
                     else:
-                        current_values = []
-                else:
-                    current_values = []
-            else:
-                # This is additional content for the current key
-                current_values.append(text)
-    
-    # Don't forget to save the last entry
-    save_current_entry()
+                        # Continue building key
+                        key_text += span_text
+                        if i < len(bold_spans) - 1 and bold_spans[i+1].get_text().strip() != ':':
+                            key_text += " "
+                
+                # Get all non-bold spans as value
+                value_parts = []
+                for span in regular_spans:
+                    span_text = span.get_text().strip()
+                    if span_text:
+                        value_parts.append(span_text)
+                
+                # Also check if there are any remaining bold spans after the colon
+                colon_found = False
+                for bold_span in bold_spans:
+                    if ':' in bold_span.get_text():
+                        colon_found = True
+                        # Check if this span has content after the colon
+                        span_text = bold_span.get_text()
+                        if ':' in span_text:
+                            after_colon = span_text.split(':', 1)[1].strip()
+                            if after_colon:
+                                value_parts.insert(0, after_colon)
+                        break
+                
+                key = key_text.strip()
+                value = ' '.join(value_parts).strip()
+                
+                # Store in appropriate dictionary
+                if key and current_section:
+                    if current_section == 'strengths':
+                        strengths_dict[key] = value
+                    elif current_section == 'weaknesses':
+                        weaknesses_dict[key] = value
     
     return strengths_dict, weaknesses_dict
 
@@ -204,7 +162,7 @@ def debug_html_structure(html_file_path):
         strengths_found = False
         for element in target_section.find_all(['p']):
             text = element.get_text().strip()
-            if 'Strengths:' in text:
+            if re.search(r'\bStrengths?\s*:?', text, re.IGNORECASE):
                 print(f"\nFound Strengths section: {text}")
                 strengths_found = True
                 break
@@ -217,30 +175,56 @@ def debug_html_structure(html_file_path):
             for element in all_elements:
                 text = element.get_text().strip()
                 
-                if 'Strengths:' in text:
+                if re.search(r'\bStrengths?\s*:?', text, re.IGNORECASE):
                     in_strengths = True
+                    print(f"\n--- ENTERING STRENGTHS SECTION ---")
                     continue
-                elif 'Weakness' in text:
+                elif re.search(r'\bWeakness(es)?\s*:?', text, re.IGNORECASE):
                     in_strengths = False
+                    print(f"\n--- ENTERING WEAKNESSES SECTION ---")
                     continue
                 
                 if in_strengths and element.name == 'li':
-                    print(f"\nList item found:")
-                    print(f"  Text: {text[:100]}...")
+                    print(f"\n📋 List item found:")
+                    print(f"  Text: {text[:150]}...")
                     
-                    # Check for bold elements
+                    # Check for spans
                     spans = element.find_all('span')
+                    print(f"  Total spans: {len(spans)}")
+                    
                     bold_spans = []
-                    for span in spans:
+                    regular_spans = []
+                    
+                    for i, span in enumerate(spans):
                         style = span.get('style', '')
-                        if 'font-weight' in style and 'bold' in style:
-                            bold_spans.append(span.get_text().strip())
+                        span_text = span.get_text().strip()
+                        is_bold = 'font-weight' in style and 'bold' in style
+                        
+                        if is_bold:
+                            bold_spans.append(span_text)
+                        else:
+                            regular_spans.append(span_text)
+                        
+                        print(f"    Span {i+1}: '{span_text}' (Bold: {is_bold})")
                     
-                    strong_tags = [tag.get_text().strip() for tag in element.find_all(['strong', 'b'])]
+                    print(f"  📝 Bold spans: {bold_spans}")
+                    print(f"  📄 Regular spans: {regular_spans}")
                     
-                    print(f"  Bold spans: {bold_spans}")
-                    print(f"  Strong tags: {strong_tags}")
-                    print(f"  HTML: {str(element)[:200]}...")
+                    # Show potential key extraction
+                    if bold_spans:
+                        key_candidate = ""
+                        for bold_text in bold_spans:
+                            if bold_text == ':':
+                                break
+                            elif bold_text.endswith(':'):
+                                key_candidate += bold_text.rstrip(':')
+                                break
+                            else:
+                                key_candidate += bold_text + " "
+                        
+                        value_candidate = ' '.join(regular_spans)
+                        print(f"  🔑 Extracted Key: '{key_candidate.strip()}'")
+                        print(f"  💡 Extracted Value: '{value_candidate[:100]}...'")
     else:
         print("Target section not found!")
 
