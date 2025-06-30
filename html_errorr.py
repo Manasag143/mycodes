@@ -56,9 +56,20 @@ def extract_from_soup(soup):
     strengths_dict = {}
     weaknesses_dict = {}
     current_section = None
+    current_key = None
+    current_values = []
     
     # Get all elements in the target section (paragraphs, lists, list items)
     all_elements = target_section.find_all(['p', 'ul', 'li'])
+    
+    def save_current_entry():
+        """Save current key-value pair to appropriate dictionary."""
+        if current_key and current_values and current_section:
+            combined_value = ' '.join(current_values).strip()
+            if current_section == 'strengths':
+                strengths_dict[current_key] = combined_value
+            elif current_section == 'weaknesses':
+                weaknesses_dict[current_key] = combined_value
     
     for element in all_elements:
         text = element.get_text().strip()
@@ -70,10 +81,18 @@ def extract_from_soup(soup):
         # Check if this is a section header (Strengths/Weaknesses)
         if element.name == 'p':
             if re.search(r'\bStrengths?\s*:', text, re.IGNORECASE):
+                # Save previous entry before switching sections
+                save_current_entry()
                 current_section = 'strengths'
+                current_key = None
+                current_values = []
                 continue
             elif re.search(r'\bWeakness(es)?\s*:', text, re.IGNORECASE):
+                # Save previous entry before switching sections
+                save_current_entry()
                 current_section = 'weaknesses'
+                current_key = None
+                current_values = []
                 continue
         
         # Process list items within a section
@@ -92,11 +111,14 @@ def extract_from_soup(soup):
             bold_elements.extend(bold_tags)
             
             if bold_elements:
+                # Save previous entry before starting new key
+                save_current_entry()
+                
                 # Get the first bold element as the key
                 key_element = bold_elements[0]
-                key = key_element.get_text().strip().rstrip(':')
+                current_key = key_element.get_text().strip().rstrip(':')
                 
-                # Get the full text and remove the key part to get the value
+                # Get the full text and remove the key part to get the initial value
                 full_text = element.get_text().strip()
                 key_text = key_element.get_text().strip()
                 
@@ -105,18 +127,20 @@ def extract_from_soup(soup):
                     value = full_text.replace(key_text, '', 1).strip()
                     # Remove leading colon if present
                     value = value.lstrip(':').strip()
+                    if value:  # Only add if there's content
+                        current_values = [value]
+                    else:
+                        current_values = []
                 else:
-                    value = full_text
-                
-                # Store in appropriate dictionary
-                if current_section == 'strengths':
-                    strengths_dict[key] = value
-                elif current_section == 'weaknesses':
-                    weaknesses_dict[key] = value
+                    current_values = []
+            else:
+                # This is additional content for the current key
+                if current_key:
+                    current_values.append(text)
         
-        # Also handle paragraphs with bold content (alternative structure)
-        elif element.name == 'p' and current_section:
-            # Check if this paragraph contains bold elements
+        # Handle paragraphs that might contain additional content for current key
+        elif element.name == 'p' and current_section and current_key:
+            # Check if this paragraph contains bold elements (new key)
             bold_elements = []
             
             # Find bold spans
@@ -130,11 +154,14 @@ def extract_from_soup(soup):
             bold_elements.extend(bold_tags)
             
             if bold_elements:
+                # Save previous entry before starting new key
+                save_current_entry()
+                
                 # Get the first bold element as the key
                 key_element = bold_elements[0]
-                key = key_element.get_text().strip().rstrip(':')
+                current_key = key_element.get_text().strip().rstrip(':')
                 
-                # Get the full text and remove the key part to get the value
+                # Get the full text and remove the key part to get the initial value
                 full_text = element.get_text().strip()
                 key_text = key_element.get_text().strip()
                 
@@ -143,14 +170,18 @@ def extract_from_soup(soup):
                     value = full_text.replace(key_text, '', 1).strip()
                     # Remove leading colon if present
                     value = value.lstrip(':').strip()
+                    if value:  # Only add if there's content
+                        current_values = [value]
+                    else:
+                        current_values = []
                 else:
-                    value = full_text
-                
-                # Store in appropriate dictionary
-                if current_section == 'strengths':
-                    strengths_dict[key] = value
-                elif current_section == 'weaknesses':
-                    weaknesses_dict[key] = value
+                    current_values = []
+            else:
+                # This is additional content for the current key
+                current_values.append(text)
+    
+    # Don't forget to save the last entry
+    save_current_entry()
     
     return strengths_dict, weaknesses_dict
 
@@ -273,54 +304,9 @@ def save_and_print_results(results):
     
     print(f"\n💾 Full results saved to 'extracted_results.json'")
 
-# Test with specific HTML content from your document
-def test_with_sample_html():
-    """Test with the provided HTML structure."""
-    # Sample HTML structure based on your document
-    sample_html = '''
-    <div>
-        <p><span style="font-family:Arial; font-weight:bold; text-decoration:underline">Key Rating Drivers & Detailed Description</span></p>
-        
-        <p><span style="font-family:Arial; font-weight:bold">Strengths:</span></p>
-        
-        <ul>
-            <li><span style="font-family:Arial; font-weight:bold">Strong position in India's phosphatic-fertiliser market:</span><span style="font-family:Arial"> Coromandel is the second-largest player in the phosphatic-fertiliser industry in India with a primary market share of ~15% in DAP/NPK; and the largest share of ~15% in single super phosphate for fiscal 2024.</span></li>
-            
-            <li><span style="font-family:Arial; font-weight:bold">Strong operating efficiency:</span><span style="font-family:Arial"> Operations benefit from economies of scale, better raw material procurement due to established relationships with suppliers, captive production of phosphoric acid, superior plant infrastructure and low handling and transportation costs.</span></li>
-            
-            <li><span style="font-family:Arial; font-weight:bold">Robust financial risk profile:</span><span style="font-family:Arial"> Coromandel maintains a net cash position of over Rs 2,000 crore (net of acceptances/suppliers credit/buyer' credit of ~Rs 4,600 crore) as on December 31, 2024.</span></li>
-        </ul>
-        
-        <p><span style="font-family:Arial; font-weight:bold">Weakness:</span></p>
-        
-        <ul>
-            <li><span style="font-family:Arial; font-weight:bold">Exposure to regulated nature of the fertiliser industry and volatility in raw material prices:</span><span style="font-family:Arial"> The fertiliser industry is strategic, but highly controlled, with fertiliser subsidy being an important component of profitability.</span></li>
-        </ul>
-    </div>
-    '''
-    
-    strengths, weaknesses = extract_from_html_content(sample_html)
-    
-    print("TEST RESULTS:")
-    print(f"Strengths found: {len(strengths)}")
-    print(f"Weaknesses found: {len(weaknesses)}")
-    
-    for key, value in strengths.items():
-        print(f"\nStrength Key: {key}")
-        print(f"Value: {value}")
-    
-    for key, value in weaknesses.items():
-        print(f"\nWeakness Key: {key}")
-        print(f"Value: {value}")
-
 # Main execution
 if __name__ == "__main__":
     folder_path = '.'  # Current folder - change this to your folder path
-    
-    # Test with sample HTML first
-    print("🧪 Testing with sample HTML structure...")
-    test_with_sample_html()
-    print("\n" + "="*80 + "\n")
     
     # Debug the actual HTML structure
     html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
