@@ -16,46 +16,76 @@ def extract_strengths_weaknesses(html_file_path):
             break
     
     if not target_section:
+        print("❌ No 'Key Rating Drivers' section found!")
         return {}, {}
+    
+    print(f"✅ Found target section: {target_section.name}")
     
     strengths_dict = {}
     weaknesses_dict = {}
     current_section = None
     
+    # Find all li elements and print count
+    all_li_elements = target_section.find_all('li')
+    print(f"📋 Found {len(all_li_elements)} <li> elements in target section")
+    
     # Process all list items
-    for li in target_section.find_all('li'):
+    for i, li in enumerate(all_li_elements):
         text = li.get_text().strip()
+        
+        print(f"\n--- Processing <li> #{i+1} ---")
+        print(f"Raw HTML: {li}")
+        print(f"Text content: '{text}'")
         
         # Skip empty items
         if not text:
+            print("⏭️  Skipping empty item")
             continue
         
         # Check for section headers (these items identify the section)
         if re.search(r'\bStrengths?\s*:?', text, re.IGNORECASE):
             current_section = 'strengths'
+            print(f"🏷️  Found STRENGTHS section header")
             continue
         elif re.search(r'\bWeakness(es)?\s*:?', text, re.IGNORECASE):
             current_section = 'weaknesses'
+            print(f"🏷️  Found WEAKNESSES section header")
             continue
+        
+        print(f"📍 Current section: {current_section}")
         
         # Extract bold text as key and remaining content as value
         if current_section:
             bold_element = li.find(['strong', 'b'])
             if bold_element:
+                print(f"🔍 Found bold element: {bold_element}")
+                
                 # Get the bold text as key (remove colons if present)
                 key = bold_element.get_text().strip().rstrip(':')
+                print(f"🔑 Extracted key: '{key}'")
                 
                 # Get the remaining text as value
                 # Remove the bold text from the full text
                 value = text.replace(bold_element.get_text().strip(), '', 1).strip()
                 # Clean up any leading colons or whitespace
                 value = value.lstrip(':').strip()
+                print(f"💭 Extracted value: '{value}'")
                 
                 # Add to appropriate dictionary based on current section
                 if current_section == 'strengths':
                     strengths_dict[key] = value
+                    print(f"✅ Added to STRENGTHS: {key} -> {value}")
                 elif current_section == 'weaknesses':
                     weaknesses_dict[key] = value
+                    print(f"⚠️  Added to WEAKNESSES: {key} -> {value}")
+            else:
+                print(f"❌ No bold element found in this <li>")
+        else:
+            print(f"❓ No current section set - skipping this item")
+    
+    print(f"\n🎯 Final Results:")
+    print(f"📈 Strengths found: {len(strengths_dict)}")
+    print(f"📉 Weaknesses found: {len(weaknesses_dict)}")
     
     return strengths_dict, weaknesses_dict
 
