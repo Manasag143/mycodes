@@ -73,8 +73,28 @@ def extract_strengths_weaknesses(html_file_path):
         style = p.get('style', '')
         print(f"🎨 Style attribute: '{style}'")
         
-        is_bold = 'font-weight' in style.lower() and 'bold' in style.lower()
-        print(f"💪 Is bold check: {is_bold}")
+        # Better bold detection - check for exact patterns
+        is_bold = False
+        if style:
+            # Check for font-weight: bold (with optional spaces)
+            if 'font-weight:bold' in style.replace(' ', ''):
+                is_bold = True
+                print(f"💪 Bold detected: font-weight:bold (no spaces)")
+            elif 'font-weight: bold' in style:
+                is_bold = True
+                print(f"💪 Bold detected: font-weight: bold (with space)")
+            elif 'font-weight:700' in style.replace(' ', ''):
+                is_bold = True
+                print(f"💪 Bold detected: font-weight:700")
+            elif 'font-weight: 700' in style:
+                is_bold = True
+                print(f"💪 Bold detected: font-weight: 700")
+            else:
+                print(f"❌ No bold pattern found in style: '{style}'")
+        else:
+            print(f"❌ No style attribute found")
+            
+        print(f"💪 Final bold result: {is_bold}")
         
         # Check if this is Strengths section
         print("🔍 Checking if this is Strengths section...")
@@ -128,8 +148,27 @@ def extract_strengths_weaknesses(html_file_path):
                 next_style = next_p.get('style', '')
                 print(f"  🎨 Next style: '{next_style}'")
                 
-                next_is_bold = 'font-weight' in next_style.lower() and 'bold' in next_style.lower()
-                print(f"  💪 Next is bold: {next_is_bold}")
+                # Better bold detection for next element too
+                next_is_bold = False
+                if next_style:
+                    if 'font-weight:bold' in next_style.replace(' ', ''):
+                        next_is_bold = True
+                        print(f"  💪 Next element bold: font-weight:bold")
+                    elif 'font-weight: bold' in next_style:
+                        next_is_bold = True
+                        print(f"  💪 Next element bold: font-weight: bold")
+                    elif 'font-weight:700' in next_style.replace(' ', ''):
+                        next_is_bold = True
+                        print(f"  💪 Next element bold: font-weight:700")
+                    elif 'font-weight: 700' in next_style:
+                        next_is_bold = True
+                        print(f"  💪 Next element bold: font-weight: 700")
+                    else:
+                        print(f"  ❌ Next element not bold")
+                else:
+                    print(f"  ❌ Next element has no style")
+                    
+                print(f"  💪 Next is bold final: {next_is_bold}")
                 
                 # Stop if we hit BOLD (next key) or Strengths/Weaknesses header
                 if next_is_bold:
