@@ -8,6 +8,41 @@ def extract_strengths_weaknesses(html_file_path):
     with open(html_file_path, 'r', encoding='utf-8') as file:
         soup = BeautifulSoup(file.read(), 'html.parser')
     
+    return extract_from_soup(soup)
+
+def extract_from_html_content(html_content):
+    """Extract strengths and weaknesses from HTML content string."""
+    soup = BeautifulSoup(html_content, 'html.parser')
+    return extract_from_soup(soup)
+
+def is_bold_element(element):
+    """Check if element has bold styling using various methods."""
+    # Method 1: Check style attribute for font-weight
+    style = element.get('style', '')
+    if 'font-weight' in style and ('bold' in style or '700' in style or 'bolder' in style):
+        return True
+    
+    # Method 2: Check for bold tags (strong, b)
+    if element.name in ['strong', 'b']:
+        return True
+    
+    # Method 3: Check class attribute
+    classes = element.get('class', [])
+    for cls in classes:
+        if 'bold' in cls.lower():
+            return True
+    
+    # Method 4: Check parent elements for bold styling
+    parent = element.parent
+    if parent:
+        parent_style = parent.get('style', '')
+        if 'font-weight' in parent_style and ('bold' in parent_style or '700' in parent_style):
+            return True
+    
+    return False
+
+def extract_from_soup(soup):
+    """Extract strengths and weaknesses from BeautifulSoup object."""
     # Find the "Key Rating Drivers" section
     target_section = None
     for element in soup.find_all(['p', 'span']):
@@ -22,13 +57,17 @@ def extract_strengths_weaknesses(html_file_path):
     weaknesses_dict = {}
     current_section = None
     
-    # Get all text elements after finding the target section
+    # Get all elements in the target section (paragraphs, lists, list items)
     all_elements = target_section.find_all(['p', 'ul', 'li'])
     
     for element in all_elements:
         text = element.get_text().strip()
         
-        # Check for section headers in paragraphs
+        # Skip empty elements
+        if not text:
+            continue
+        
+        # Check if this is a section header (Strengths/Weaknesses)
         if element.name == 'p':
             if re.search(r'\bStrengths?\s*:', text, re.IGNORECASE):
                 current_section = 'strengths'
@@ -37,10 +76,20 @@ def extract_strengths_weaknesses(html_file_path):
                 current_section = 'weaknesses'
                 continue
         
-        # Process list items
+        # Process list items within a section
         if element.name == 'li' and current_section:
-            # Find bold elements (strong or b tags)
-            bold_elements = element.find_all(['strong', 'b'])
+            # Look for bold elements within this list item
+            bold_elements = []
+            
+            # Find all spans with bold styling
+            spans = element.find_all('span')
+            for span in spans:
+                if is_bold_element(span):
+                    bold_elements.append(span)
+            
+            # Also check for strong/b tags
+            bold_tags = element.find_all(['strong', 'b'])
+            bold_elements.extend(bold_tags)
             
             if bold_elements:
                 # Get the first bold element as the key
@@ -49,18 +98,53 @@ def extract_strengths_weaknesses(html_file_path):
                 
                 # Get the full text and remove the key part to get the value
                 full_text = element.get_text().strip()
-                
-                # Find the position where the key ends and extract the value
                 key_text = key_element.get_text().strip()
+                
+                # Remove the key from the full text to get the value
                 if key_text in full_text:
-                    # Split at the key and take everything after
-                    parts = full_text.split(key_text, 1)
-                    if len(parts) > 1:
-                        value = parts[1].strip().lstrip(':').strip()
-                    else:
-                        value = ""
+                    value = full_text.replace(key_text, '', 1).strip()
+                    # Remove leading colon if present
+                    value = value.lstrip(':').strip()
                 else:
-                    value = full_text.replace(key_text, '', 1).strip().lstrip(':').strip()
+                    value = full_text
+                
+                # Store in appropriate dictionary
+                if current_section == 'strengths':
+                    strengths_dict[key] = value
+                elif current_section == 'weaknesses':
+                    weaknesses_dict[key] = value
+        
+        # Also handle paragraphs with bold content (alternative structure)
+        elif element.name == 'p' and current_section:
+            # Check if this paragraph contains bold elements
+            bold_elements = []
+            
+            # Find bold spans
+            spans = element.find_all('span')
+            for span in spans:
+                if is_bold_element(span):
+                    bold_elements.append(span)
+            
+            # Find bold tags
+            bold_tags = element.find_all(['strong', 'b'])
+            bold_elements.extend(bold_tags)
+            
+            if bold_elements:
+                # Get the first bold element as the key
+                key_element = bold_elements[0]
+                key = key_element.get_text().strip().rstrip(':')
+                
+                # Get the full text and remove the key part to get the value
+                full_text = element.get_text().strip()
+                key_text = key_element.get_text().strip()
+                
+                # Remove the key from the full text to get the value
+                if key_text in full_text:
+                    value = full_text.replace(key_text, '', 1).strip()
+                    # Remove leading colon if present
+                    value = value.lstrip(':').strip()
+                else:
+                    value = full_text
                 
                 # Store in appropriate dictionary
                 if current_section == 'strengths':
@@ -70,71 +154,64 @@ def extract_strengths_weaknesses(html_file_path):
     
     return strengths_dict, weaknesses_dict
 
-def extract_from_html_content(html_content):
-    """Extract strengths and weaknesses from HTML content string."""
-    soup = BeautifulSoup(html_content, 'html.parser')
+def debug_html_structure(html_file_path):
+    """Debug function to understand HTML structure."""
+    with open(html_file_path, 'r', encoding='utf-8') as file:
+        soup = BeautifulSoup(file.read(), 'html.parser')
     
-    # Find the "Key Rating Drivers" section
+    # Find the target section
     target_section = None
     for element in soup.find_all(['p', 'span']):
         if 'Key Rating Drivers' in element.get_text():
             target_section = element.find_parent()
             break
     
-    if not target_section:
-        return {}, {}
-    
-    strengths_dict = {}
-    weaknesses_dict = {}
-    current_section = None
-    
-    # Get all text elements after finding the target section
-    all_elements = target_section.find_all(['p', 'ul', 'li'])
-    
-    for element in all_elements:
-        text = element.get_text().strip()
+    if target_section:
+        print("Found target section!")
         
-        # Check for section headers in paragraphs
-        if element.name == 'p':
-            if re.search(r'\bStrengths?\s*:', text, re.IGNORECASE):
-                current_section = 'strengths'
-                continue
-            elif re.search(r'\bWeakness(es)?\s*:', text, re.IGNORECASE):
-                current_section = 'weaknesses'
-                continue
+        # Look for Strengths section
+        strengths_found = False
+        for element in target_section.find_all(['p']):
+            text = element.get_text().strip()
+            if 'Strengths:' in text:
+                print(f"\nFound Strengths section: {text}")
+                strengths_found = True
+                break
         
-        # Process list items
-        if element.name == 'li' and current_section:
-            # Find bold elements (strong or b tags)
-            bold_elements = element.find_all(['strong', 'b'])
+        if strengths_found:
+            # Find all list items after strengths
+            all_elements = target_section.find_all(['p', 'ul', 'li'])
+            in_strengths = False
             
-            if bold_elements:
-                # Get the first bold element as the key
-                key_element = bold_elements[0]
-                key = key_element.get_text().strip().rstrip(':')
+            for element in all_elements:
+                text = element.get_text().strip()
                 
-                # Get the full text and remove the key part to get the value
-                full_text = element.get_text().strip()
+                if 'Strengths:' in text:
+                    in_strengths = True
+                    continue
+                elif 'Weakness' in text:
+                    in_strengths = False
+                    continue
                 
-                # Find the position where the key ends and extract the value
-                key_text = key_element.get_text().strip()
-                if key_text in full_text:
-                    # Split at the key and take everything after
-                    parts = full_text.split(key_text, 1)
-                    if len(parts) > 1:
-                        value = parts[1].strip().lstrip(':').strip()
-                    else:
-                        value = ""
-                else:
-                    value = full_text.replace(key_text, '', 1).strip().lstrip(':').strip()
-                
-                # Store in appropriate dictionary
-                if current_section == 'strengths':
-                    strengths_dict[key] = value
-                elif current_section == 'weaknesses':
-                    weaknesses_dict[key] = value
-    
-    return strengths_dict, weaknesses_dict
+                if in_strengths and element.name == 'li':
+                    print(f"\nList item found:")
+                    print(f"  Text: {text[:100]}...")
+                    
+                    # Check for bold elements
+                    spans = element.find_all('span')
+                    bold_spans = []
+                    for span in spans:
+                        style = span.get('style', '')
+                        if 'font-weight' in style and 'bold' in style:
+                            bold_spans.append(span.get_text().strip())
+                    
+                    strong_tags = [tag.get_text().strip() for tag in element.find_all(['strong', 'b'])]
+                    
+                    print(f"  Bold spans: {bold_spans}")
+                    print(f"  Strong tags: {strong_tags}")
+                    print(f"  HTML: {str(element)[:200]}...")
+    else:
+        print("Target section not found!")
 
 def process_folder(folder_path='.'):
     """Process all HTML files in a folder."""
@@ -170,9 +247,9 @@ def save_and_print_results(results):
         json.dump(results, f, indent=2, ensure_ascii=False)
     
     # Print summary
-    print(f"\n{'='*50}")
+    print(f"\n{'='*80}")
     print("RESULTS SUMMARY")
-    print(f"{'='*50}")
+    print(f"{'='*80}")
     
     for filename, data in results.items():
         print(f"\n📄 {filename}:")
@@ -180,43 +257,77 @@ def save_and_print_results(results):
         print(f"   ⚠️  Weaknesses: {len(data['weaknesses'])}")
         
         # Print actual content
-        print("\n   STRENGTHS:")
-        for key, value in data['strengths'].items():
-            print(f"   💪 {key}: {value[:100]}...")
+        if data['strengths']:
+            print("\n   STRENGTHS:")
+            for i, (key, value) in enumerate(data['strengths'].items(), 1):
+                print(f"   {i}. Key: {key}")
+                print(f"      Value: {value[:200]}...")
+                print()
         
-        print("\n   WEAKNESSES:")
-        for key, value in data['weaknesses'].items():
-            print(f"   ⚡ {key}: {value[:100]}...")
+        if data['weaknesses']:
+            print("\n   WEAKNESSES:")
+            for i, (key, value) in enumerate(data['weaknesses'].items(), 1):
+                print(f"   {i}. Key: {key}")
+                print(f"      Value: {value[:200]}...")
+                print()
     
     print(f"\n💾 Full results saved to 'extracted_results.json'")
 
-# Example usage with the provided HTML content
-def demo_with_provided_html():
-    """Demo function to show how it works with your HTML content."""
-    # Your HTML content would go here
-    html_content = """
-    <!-- Your HTML content here -->
-    """
+# Test with specific HTML content from your document
+def test_with_sample_html():
+    """Test with the provided HTML structure."""
+    # Sample HTML structure based on your document
+    sample_html = '''
+    <div>
+        <p><span style="font-family:Arial; font-weight:bold; text-decoration:underline">Key Rating Drivers & Detailed Description</span></p>
+        
+        <p><span style="font-family:Arial; font-weight:bold">Strengths:</span></p>
+        
+        <ul>
+            <li><span style="font-family:Arial; font-weight:bold">Strong position in India's phosphatic-fertiliser market:</span><span style="font-family:Arial"> Coromandel is the second-largest player in the phosphatic-fertiliser industry in India with a primary market share of ~15% in DAP/NPK; and the largest share of ~15% in single super phosphate for fiscal 2024.</span></li>
+            
+            <li><span style="font-family:Arial; font-weight:bold">Strong operating efficiency:</span><span style="font-family:Arial"> Operations benefit from economies of scale, better raw material procurement due to established relationships with suppliers, captive production of phosphoric acid, superior plant infrastructure and low handling and transportation costs.</span></li>
+            
+            <li><span style="font-family:Arial; font-weight:bold">Robust financial risk profile:</span><span style="font-family:Arial"> Coromandel maintains a net cash position of over Rs 2,000 crore (net of acceptances/suppliers credit/buyer' credit of ~Rs 4,600 crore) as on December 31, 2024.</span></li>
+        </ul>
+        
+        <p><span style="font-family:Arial; font-weight:bold">Weakness:</span></p>
+        
+        <ul>
+            <li><span style="font-family:Arial; font-weight:bold">Exposure to regulated nature of the fertiliser industry and volatility in raw material prices:</span><span style="font-family:Arial"> The fertiliser industry is strategic, but highly controlled, with fertiliser subsidy being an important component of profitability.</span></li>
+        </ul>
+    </div>
+    '''
     
-    strengths, weaknesses = extract_from_html_content(html_content)
+    strengths, weaknesses = extract_from_html_content(sample_html)
     
-    print("EXTRACTED STRENGTHS:")
+    print("TEST RESULTS:")
+    print(f"Strengths found: {len(strengths)}")
+    print(f"Weaknesses found: {len(weaknesses)}")
+    
     for key, value in strengths.items():
-        print(f"Key: {key}")
+        print(f"\nStrength Key: {key}")
         print(f"Value: {value}")
-        print("-" * 50)
     
-    print("\nEXTRACTED WEAKNESSES:")
     for key, value in weaknesses.items():
-        print(f"Key: {key}")
+        print(f"\nWeakness Key: {key}")
         print(f"Value: {value}")
-        print("-" * 50)
-    
-    return {'strengths': strengths, 'weaknesses': weaknesses}
 
 # Main execution
 if __name__ == "__main__":
     folder_path = '.'  # Current folder - change this to your folder path
+    
+    # Test with sample HTML first
+    print("🧪 Testing with sample HTML structure...")
+    test_with_sample_html()
+    print("\n" + "="*80 + "\n")
+    
+    # Debug the actual HTML structure
+    html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
+    if html_files:
+        print("🔍 Debugging actual HTML structure...")
+        debug_html_structure(os.path.join(folder_path, html_files[0]))
+        print("\n" + "="*80 + "\n")
     
     print("🔍 Processing all HTML files in folder...")
     results = process_folder(folder_path)
@@ -225,6 +336,3 @@ if __name__ == "__main__":
         save_and_print_results(results)
     else:
         print("❌ No HTML files found or processed successfully!")
-        
-    # Uncomment to test with specific HTML content
-    # demo_with_provided_html()
