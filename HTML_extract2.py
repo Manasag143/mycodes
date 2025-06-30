@@ -34,49 +34,80 @@ def extract_rating_drivers(html_file_path):
     # Step 2: Extract all content from this section
     result_dict = {}
     current_section = None  # 'strengths' or 'weaknesses'
+    processing_started = False
     
     # Get all elements in the rating drivers section
     all_elements = rating_drivers_section.find_all(['p', 'ul', 'li'])
     
-    for element in all_elements:
+    print(f"🔍 Found {len(all_elements)} elements to analyze")
+    
+    for i, element in enumerate(all_elements):
         element_text = element.get_text().strip()
         
-        # Step 3: Identify Strengths and Weaknesses headers
-        if element.name == 'p':
-            # Look for "Strengths:" header
-            if re.search(r'\bStrengths?\s*:?\s*$', element_text, re.IGNORECASE):
-                current_section = 'strengths'
-                print("💪 Found Strengths section")
-                continue
+        # Skip empty elements
+        if not element_text or element_text.isspace():
+            continue
             
-            # Look for "Weakness:" header  
-            elif re.search(r'\bWeakness(es)?\s*:?\s*$', element_text, re.IGNORECASE):
-                current_section = 'weaknesses'
-                print("⚠️ Found Weaknesses section")
-                continue
+        print(f"   Analyzing element {i}: {element.name} - '{element_text[:50]}...'")
         
-        # Step 4: Extract key-value pairs from list items
-        if element.name == 'li' and current_section:
+        # Step 3: Start processing after finding Key Rating Drivers
+        if not processing_started:
+            if 'Key Rating Drivers' in element_text:
+                processing_started = True
+                print("🚀 Starting extraction after Key Rating Drivers header")
+            continue
+        
+        # Step 4: Identify section headers
+        if element.name == 'p':
+            # Look for "Strengths:" header (more specific pattern)
+            strengths_spans = element.find_all('span')
+            for span in strengths_spans:
+                span_text = span.get_text().strip()
+                if re.match(r'^Strengths?:?$', span_text, re.IGNORECASE):
+                    current_section = 'strengths'
+                    print("💪 Found Strengths section")
+                    break
+            
+            # Look for "Weakness:" header (more specific pattern)
+            for span in strengths_spans:
+                span_text = span.get_text().strip()
+                if re.match(r'^Weakness(es)?:?$', span_text, re.IGNORECASE):
+                    current_section = 'weaknesses'
+                    print("⚠️ Found Weaknesses section")
+                    break
+        
+        # Step 5: Extract key-value pairs from list items
+        elif element.name == 'li' and current_section:
+            print(f"      🔎 Processing {current_section} list item...")
             
             # Find all spans in this list item
             spans = element.find_all('span')
             
+            if not spans:
+                print("      ❌ No spans found in this list item")
+                continue
+            
             key = None
             value_parts = []
+            found_key = False
             
             for span in spans:
                 span_style = span.get('style', '')
                 span_text = span.get_text().strip()
                 
+                print(f"         Span: '{span_text}' | Bold: {'font-weight:bold' in span_style}")
+                
                 # If it's a bold span and not just a colon, it's our key
                 if 'font-weight:bold' in span_style and span_text and span_text != ':':
-                    if not key:  # Take the first bold text as key
+                    if not found_key:  # Take the first bold text as key
                         key = span_text.rstrip(':').strip()
+                        found_key = True
+                        print(f"         🔑 Found key: '{key}'")
                 
-                # If it's not bold (or just a colon), it's part of the value
-                elif span_text and ('font-weight:bold' not in span_style or span_text == ':'):
-                    if span_text != ':':  # Skip standalone colons
-                        value_parts.append(span_text)
+                # If it's not bold and not empty, it's part of the value
+                elif span_text and 'font-weight:bold' not in span_style:
+                    value_parts.append(span_text)
+                    print(f"         📝 Added to value: '{span_text[:30]}...'")
             
             # Clean and combine the value
             if key and value_parts:
@@ -87,25 +118,81 @@ def extract_rating_drivers(html_file_path):
                 
                 if value:  # Only add if we have actual content
                     result_dict[key] = value
-                    print(f"   ✅ {key}: {value[:60]}...")
+                    print(f"      ✅ Added: {key} = {value[:60]}...")
+                else:
+                    print(f"      ❌ Empty value for key: {key}")
+            else:
+                print(f"      ❌ Missing key or value. Key: '{key}', Value parts: {len(value_parts)}")
         
-        # Step 5: Stop when we reach next major section
-        if element.name == 'p' and current_section:
-            lower_text = element_text.lower()
-            stop_keywords = ['liquidity', 'outlook', 'analytical approach', 'rating sensitivity', 'about the company']
-            if any(keyword in lower_text for keyword in stop_keywords):
-                print(f"🛑 Reached next section, stopping extraction")
+        # Step 6: More specific stop conditions - only stop at major section headers
+        elif element.name == 'p' and processing_started:
+            # Only stop at very specific major section headers
+            major_sections = [
+                'Liquidity:', 'Outlook:', 'Rating sensitivity factors', 'Analytical Approach',
+                'About the Company', 'Key Financial Indicators'
+            ]
+            
+            if any(section in element_text for section in major_sections):
+                print(f"🛑 Reached major section: '{element_text[:50]}...' - Stopping extraction")
                 break
     
-    print(f"📊 Extracted {len(result_dict)} items total")
+    print(f"📊 Extraction complete! Found {len(result_dict)} items")
     return result_dict
 
-def process_files(folder_path='.', specific_file=None):
+def debug_html_structure(html_file_path):
+    """
+    Debug function to show the HTML structure around the Key Rating Drivers section
+    """
+    print("🔧 DEBUG MODE - Analyzing HTML Structure")
+    print("="*60)
+    
+    with open(html_file_path, 'r', encoding='utf-8') as file:
+        soup = BeautifulSoup(file.read(), 'html.parser')
+    
+    # Find the Key Rating Drivers section
+    for element in soup.find_all(['p', 'span']):
+        text = element.get_text().strip()
+        if 'Key Rating Drivers' in text and 'Detailed Description' in text:
+            container = element.find_parent(['div', 'td', 'table'])
+            print(f"✅ Found container: {container.name}")
+            
+            # Show the next 20 elements after this
+            all_elements = container.find_all(['p', 'ul', 'li'])
+            start_index = 0
+            
+            # Find where we are in the list
+            for i, elem in enumerate(all_elements):
+                if 'Key Rating Drivers' in elem.get_text():
+                    start_index = i
+                    break
+            
+            print(f"\n📋 Next 20 elements after Key Rating Drivers:")
+            for i in range(start_index, min(start_index + 20, len(all_elements))):
+                elem = all_elements[i]
+                text = elem.get_text().strip()
+                print(f"   {i}: {elem.name} - '{text[:60]}...'")
+                
+                # Show spans for list items
+                if elem.name == 'li':
+                    spans = elem.find_all('span')
+                    for j, span in enumerate(spans):
+                        style = span.get('style', '')
+                        span_text = span.get_text().strip()
+                        is_bold = 'font-weight:bold' in style
+                        print(f"      Span {j}: {'[BOLD]' if is_bold else '[REGULAR]'} '{span_text}'")
+            break
+
+def process_files(folder_path='.', specific_file=None, debug_mode=False):
     """
     Process either a specific file or all HTML files in folder
     """
     
     if specific_file and os.path.exists(specific_file):
+        # Debug mode
+        if debug_mode:
+            debug_html_structure(specific_file)
+            return {}
+        
         # Process single file
         print(f"🎯 Processing specific file: {specific_file}")
         result = extract_rating_drivers(specific_file)
@@ -160,40 +247,22 @@ def save_and_display_results(results):
         print(f"\n📄 FILE: {filename}")
         print(f"{'='*60}")
         
-        # Separate strengths and weaknesses for better display
-        strengths = {}
-        weaknesses = {}
-        
-        for key, value in data.items():
-            # Simple heuristic to categorize
+        for i, (key, value) in enumerate(data.items(), 1):
+            # Determine if it's likely a strength or weakness
             key_lower = key.lower()
-            if any(word in key_lower for word in ['strong', 'robust', 'good', 'efficient', 'leading', 'position']):
-                strengths[key] = value
-            elif any(word in key_lower for word in ['exposure', 'risk', 'volatility', 'weakness', 'dependent']):
-                weaknesses[key] = value
+            if any(word in key_lower for word in ['exposure', 'risk', 'volatility', 'weakness', 'dependent']):
+                icon = "⚠️"
+                category = "WEAKNESS"
             else:
-                # If unclear, put in strengths by default (most items are strengths)
-                strengths[key] = value
-        
-        # Display strengths
-        if strengths:
-            print(f"\n💪 STRENGTHS ({len(strengths)}):")
-            print("-" * 40)
-            for i, (key, value) in enumerate(strengths.items(), 1):
-                print(f"{i}. KEY: {key}")
-                print(f"   VALUE: {value}")
-                print()
-        
-        # Display weaknesses  
-        if weaknesses:
-            print(f"⚠️  WEAKNESSES ({len(weaknesses)}):")
-            print("-" * 40)
-            for i, (key, value) in enumerate(weaknesses.items(), 1):
-                print(f"{i}. KEY: {key}")
-                print(f"   VALUE: {value}")
-                print()
+                icon = "💪"
+                category = "STRENGTH"
+            
+            print(f"{i}. {icon} {category}")
+            print(f"   KEY: {key}")
+            print(f"   VALUE: {value}")
+            print()
     
-    print(f"\n💾 Results saved to: {output_file}")
+    print(f"💾 Results saved to: {output_file}")
     print(f"📊 Total items extracted: {sum(len(data) for data in results.values())}")
 
 def main():
@@ -207,44 +276,35 @@ def main():
     # Option 1: Process specific file (recommended)
     specific_file = "Rating Rationale.html"  # Change this to your file name
     
+    # Debug mode - set to True to see HTML structure
+    debug_mode = False  # Change to True for debugging
+    
     if os.path.exists(specific_file):
         print(f"✅ Found specific file: {specific_file}")
-        results = process_files(specific_file=specific_file)
+        
+        if debug_mode:
+            print("🔧 Running in DEBUG mode...")
+            process_files(specific_file=specific_file, debug_mode=True)
+        else:
+            results = process_files(specific_file=specific_file)
+            
+            # Save and display results
+            if results:
+                save_and_display_results(results)
+                print("\n🎉 Extraction completed successfully!")
+            else:
+                print("\n❌ No data extracted. Try running in debug mode to see the HTML structure.")
+                print("💡 Set debug_mode = True in the main() function")
     else:
         print(f"❌ Specific file '{specific_file}' not found")
         print("🔍 Processing all HTML files in current directory...")
         results = process_files('.')
-    
-    # Save and display results
-    if results:
-        save_and_display_results(results)
-        print("\n🎉 Extraction completed successfully!")
-    else:
-        print("\n❌ No data extracted. Please check your HTML file structure.")
-
-# Test function to verify our expected results
-def test_expected_results():
-    """
-    Test function to show what we expect to extract
-    """
-    
-    expected_results = {
-        "Rating Rationale": {
-            "Strong position in India's phosphatic-fertiliser market": "Coromandel is the second-largest player in the phosphatic-fertiliser industry in India with a primary market share of ~15% in DAP/NPK...",
-            "Strong operating efficiency": "Operations benefit from economies of scale, better raw material procurement due to established relationships with suppliers...",
-            "Robust financial risk profile": "Coromandel maintains a net cash position of over Rs 2,000 crore...",
-            "Exposure to regulated nature of the fertiliser industry and volatility in raw material prices": "The fertiliser industry is strategic, but highly controlled, with fertiliser subsidy being an important component of profitability..."
-        }
-    }
-    
-    print("🎯 EXPECTED RESULTS:")
-    print("="*50)
-    for key in expected_results["Rating Rationale"]:
-        print(f"• {key}")
+        
+        if results:
+            save_and_display_results(results)
+            print("\n🎉 Extraction completed successfully!")
+        else:
+            print("\n❌ No data extracted. Please check your HTML file structure.")
 
 if __name__ == "__main__":
-    # Uncomment the line below to see expected results
-    # test_expected_results()
-    
-    # Run the main extraction
     main()
