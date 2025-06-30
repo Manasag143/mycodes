@@ -28,14 +28,26 @@ def extract_strengths_weaknesses(html_file_path):
     print(full_text)
     print("=" * 60)
     
-    # Find all bold elements in the entire target section
-    all_bold_elements = target_section.find_all(['strong', 'b'])
-    print(f"\n💪 ALL BOLD ELEMENTS FOUND: {len(all_bold_elements)}")
+    # Find all elements with font-weight: bold CSS style
+    all_bold_elements = []
+    
+    # Look for elements with style="font-weight: bold" or style containing "font-weight:bold"
+    for element in target_section.find_all():
+        style = element.get('style', '')
+        if style and 'font-weight' in style.lower():
+            if 'bold' in style.lower():
+                all_bold_elements.append(element)
+    
+    print(f"\n💪 ELEMENTS WITH font-weight: bold FOUND: {len(all_bold_elements)}")
     print("=" * 60)
     
     for i, bold in enumerate(all_bold_elements):
         bold_text = bold.get_text().strip()
+        style = bold.get('style', '')
         print(f"{i+1}. Bold text: '{bold_text}'")
+        print(f"    Style: {style}")
+        print(f"    Tag: <{bold.name}>")
+        print()
     
     # Now let's look for Strengths and Weaknesses sections in the text
     print(f"\n🔍 LOOKING FOR STRENGTHS AND WEAKNESSES SECTIONS:")
@@ -61,26 +73,58 @@ def extract_strengths_weaknesses(html_file_path):
             elif current_section:
                 print(f"    📍 In {current_section} section")
     
-    # Alternative approach: Find all elements that contain bold text
-    print(f"\n🔍 ELEMENTS CONTAINING BOLD TEXT:")
+    # Alternative approach: Find all elements that contain bold text (with CSS styling)
+    print(f"\n🔍 ELEMENTS WITH font-weight: bold STYLING:")
     print("=" * 60)
     
-    # Find all elements that have bold children
+    # Find all elements with font-weight bold styling
     elements_with_bold = []
     for element in target_section.find_all():
-        if element.find(['strong', 'b']):
+        style = element.get('style', '')
+        if 'font-weight' in style.lower() and 'bold' in style.lower():
             elements_with_bold.append(element)
     
-    print(f"Found {len(elements_with_bold)} elements containing bold text:")
+    print(f"Found {len(elements_with_bold)} elements with font-weight: bold:")
     for i, elem in enumerate(elements_with_bold):
         print(f"\nElement {i+1}:")
         print(f"  Tag: <{elem.name}>")
+        print(f"  Style: {elem.get('style', 'No style')}")
         print(f"  Full text: '{elem.get_text().strip()}'")
         
-        # Find bold elements within this element
-        bold_in_elem = elem.find_all(['strong', 'b'])
-        for j, bold in enumerate(bold_in_elem):
-            print(f"    Bold {j+1}: '{bold.get_text().strip()}'")
+        # Check if parent has any context about strengths/weaknesses
+        parent = elem.parent
+        if parent:
+            parent_text = parent.get_text().strip()
+            print(f"  Parent text: '{parent_text[:100]}...'")
+    
+    # Also check for any CSS classes that might indicate bold text
+    print(f"\n🔍 CHECKING FOR CSS CLASSES THAT MIGHT INDICATE BOLD:")
+    print("=" * 60)
+    
+    potential_bold_classes = ['bold', 'strong', 'weight-bold', 'font-bold', 'fw-bold']
+    for class_name in potential_bold_classes:
+        elements = target_section.find_all(class_=class_name)
+        if elements:
+            print(f"Found {len(elements)} elements with class '{class_name}':")
+            for elem in elements:
+                print(f"  Text: '{elem.get_text().strip()}'")
+    
+    # Let's also search for common patterns in the text
+    print(f"\n🔍 SEARCHING ALL ELEMENTS FOR PATTERN MATCHING:")
+    print("=" * 60)
+    
+    all_elements = target_section.find_all()
+    for i, elem in enumerate(all_elements):
+        text = elem.get_text().strip()
+        style = elem.get('style', '')
+        
+        # Look for elements that might be keys (ending with colon)
+        if text and ':' in text and len(text) < 100:  # Likely a key if short and has colon
+            print(f"Potential key element {i+1}:")
+            print(f"  Tag: <{elem.name}>")
+            print(f"  Text: '{text}'")
+            print(f"  Style: '{style}'")
+            print()
     
     return {}, {}
 
