@@ -72,29 +72,81 @@ def extract_strengths_weaknesses(html_file_path):
         
         style = p.get('style', '')
         print(f"🎨 Style attribute: '{style}'")
+        print(f"🔍 Style length: {len(style)}")
+        print(f"🔍 Style repr: {repr(style)}")
+        
+        # Check the complete HTML of this element
+        print(f"🏷️  Complete HTML: {p}")
+        
+        # Check for class attributes that might indicate bold
+        classes = p.get('class', [])
+        print(f"📋 Classes: {classes}")
         
         # Better bold detection - check for exact patterns
         is_bold = False
+        
+        # Method 1: Check style attribute
         if style:
-            # Check for font-weight: bold (with optional spaces)
-            if 'font-weight:bold' in style.replace(' ', ''):
+            print(f"🔍 Checking style patterns...")
+            
+            # Remove all spaces and check
+            style_no_spaces = style.replace(' ', '').lower()
+            print(f"🔍 Style without spaces: '{style_no_spaces}'")
+            
+            if 'font-weight:bold' in style_no_spaces:
                 is_bold = True
-                print(f"💪 Bold detected: font-weight:bold (no spaces)")
-            elif 'font-weight: bold' in style:
+                print(f"✅ Bold detected: font-weight:bold pattern")
+            elif 'font-weight:700' in style_no_spaces:
                 is_bold = True
-                print(f"💪 Bold detected: font-weight: bold (with space)")
-            elif 'font-weight:700' in style.replace(' ', ''):
+                print(f"✅ Bold detected: font-weight:700 pattern")
+            elif 'fontweight:bold' in style_no_spaces:
                 is_bold = True
-                print(f"💪 Bold detected: font-weight:700")
-            elif 'font-weight: 700' in style:
+                print(f"✅ Bold detected: fontweight:bold pattern")
+            elif 'fontweight:700' in style_no_spaces:
                 is_bold = True
-                print(f"💪 Bold detected: font-weight: 700")
+                print(f"✅ Bold detected: fontweight:700 pattern")
             else:
-                print(f"❌ No bold pattern found in style: '{style}'")
-        else:
-            print(f"❌ No style attribute found")
+                print(f"❌ No bold pattern found in style")
+                
+        # Method 2: Check class attributes for bold indicators
+        if not is_bold and classes:
+            print(f"🔍 Checking classes for bold indicators...")
+            bold_classes = ['bold', 'font-bold', 'fw-bold', 'weight-bold', 'strong']
+            for class_name in classes:
+                if any(bold_word in class_name.lower() for bold_word in bold_classes):
+                    is_bold = True
+                    print(f"✅ Bold detected in class: '{class_name}'")
+                    break
+            if not is_bold:
+                print(f"❌ No bold classes found")
+        
+        # Method 3: Check if element is inside a <strong> or <b> tag
+        if not is_bold:
+            print(f"🔍 Checking if element contains <strong> or <b> tags...")
+            if p.find('strong') or p.find('b'):
+                is_bold = True
+                print(f"✅ Bold detected: contains <strong> or <b> tag")
+            else:
+                print(f"❌ No <strong> or <b> tags found")
+        
+        # Method 4: Check computed styles or other attributes
+        if not is_bold:
+            print(f"🔍 Checking other attributes...")
+            all_attrs = p.attrs
+            print(f"📋 All attributes: {all_attrs}")
+            
+            # Sometimes bold is in other attributes
+            for attr_name, attr_value in all_attrs.items():
+                if isinstance(attr_value, str) and ('bold' in attr_value.lower() or '700' in attr_value):
+                    is_bold = True
+                    print(f"✅ Bold detected in attribute '{attr_name}': '{attr_value}'")
+                    break
+            
+            if not is_bold:
+                print(f"❌ No bold found in any attributes")
             
         print(f"💪 Final bold result: {is_bold}")
+        print(f"━━━ END BOLD DETECTION ━━━")
         
         # Check if this is Strengths section
         print("🔍 Checking if this is Strengths section...")
