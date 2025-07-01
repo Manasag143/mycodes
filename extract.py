@@ -3,11 +3,70 @@ import re
 import time
 import pandas as pd
 import fitz  # PyMuPDF
+import requests
 import warnings
+import hashlib
+import logging
 from typing import Dict, List, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Suppress warnings
+# Suppress SSL warnings
 warnings.filterwarnings('ignore')
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Define the Llama URL
+LLAMA_URL = "https://ue1-llm.crisil.local/llama3_3/70b/llm/"
+
+def getFilehash(file_path: str):
+    with open(file_path, 'rb') as f:
+        return hashlib.sha3_256(f.read()).hexdigest()
+
+class LLMGenerator:
+    """Component to generate responses from hosted LLM model"""
+    def __init__(self, url: str = LLAMA_URL):
+        self.url = url
+        self.generation_kwargs = {
+            "max_new_tokens": 2048,
+            "return_full_text": False,
+            "temperature": 0.1
+        }
+        # Use a session for connection pooling
+        self.session = requests.Session()
+        self.session.verify = False  # Disable SSL verification
+    
+    def run(self, prompt: str) -> str:
+        """Send prompt to LLM and get response with timeout"""
+        start_time = time.time()
+        body = {
+            "inputs": prompt,
+            "parameters": {**self.generation_kwargs}
+        }
+        try:
+            # Add timeout parameter to prevent hanging
+            response = self.session.post(self.url, json=body, timeout=30)
+            
+            if response.status_code != 200:
+                print(f"API Error: Status {response.status_code}")
+                return f"Error: LLM API error: Status {response.status_code}"
+            
+            response_json = response.json()
+            if isinstance(response_json, list) and len(response_json) > 0:
+                result = response_json[0].get('generated_text', '')
+                print(f"LLM API call took {time.time() - start_time:.2f} seconds")
+                return result
+            else:
+                print(f"Unexpected API response format: {response_json}")
+                return "Error: Unexpected response format from LLM API"
+                
+        except requests.exceptions.Timeout:
+            print(f"API call timed out after {time.time() - start_time:.2f} seconds")
+            return "Error: Request to LLM API timed out"
+        except Exception as e:
+            print(f"API call failed after {time.time() - start_time:.2f} seconds: {e}")
+            return f"Error: {str(e)}"
 
 class PDFExtractor:
     """Class for extracting text from PDF files"""
@@ -33,306 +92,104 @@ class PDFExtractor:
             print(f"PDF extraction error after {time.time() - start_time:.2f} seconds: {e}")
             raise
 
-class SimplePatternExtractor:
-    """Simple pattern extractor that matches exact questions as keywords"""
+def mergeDocs(pdf_path: str, split_pages: bool = False) -> List[Dict[str, Any]]:
+    """Merge PDF documents into a single context"""
+    extractor = PDFExtractor()
+    pages = extractor.extract_text_from_pdf(pdf_path)
     
-    def __init__(self):
-        # Define the questions and their target pages
-        self.questions_config = {
-            "Corporate identity number (CIN) of company": {
-                "page": 1,
-                "patterns": [
-                    r'Corporate identity number \(CIN\) of company[:\s]*([A-Z0-9]{21})',
-                    r'([LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6})'
-                ]
-            },
-            "Financial year to which financial statements relates": {
-                "page": 1,
-                "patterns": [
-                    r'Financial year to which financial statements relates[:\s]*([0-9]{4}[-/][0-9]{2,4})',
-                    r'([0-9]{4}[-/][0-9]{2,4})'
-                ]
-            },
-            "Product or service category code (ITC/ NPCS 4 digit code)": {
-                "page": 10,
-                "patterns": [
-                    r'Product or service category code \(ITC/ NPCS 4 digit code\)[:\s]*([0-9]{4})',
-                    r'([0-9]{4})'
-                ]
-            },
-            "Description of the product or service category": {
-                "page": 10,
-                "patterns": [
-                    r'Description of the product or service category[:\s]*([^\n\r]{10,150})',
-                    r'([A-Za-z\s,.-]{10,150})'
-                ]
-            },
-            "Turnover of the product or service category (in Rupees)": {
-                "page": 10,
-                "patterns": [
-                    r'Turnover of the product or service category \(in Rupees\)[:\s]*([0-9,]+)',
-                    r'([0-9,]{6,})'
-                ]
-            },
-            "Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)": {
-                "page": 10,
-                "patterns": [
-                    r'Highest turnover contributing product or service code \(ITC/ NPCS 8 digit code\)[:\s]*([0-9]{8})',
-                    r'([0-9]{8})'
-                ]
-            },
-            "Description of the product or service": {
-                "page": 10,
-                "patterns": [
-                    r'Description of the product or service[:\s]*([^\n\r]{10,150})',
-                    r'([A-Za-z\s,.-]{10,150})'
-                ]
-            },
-            "Turnover of highest contributing product or service (in Rupees)": {
-                "page": 10,
-                "patterns": [
-                    r'Turnover of highest contributing product or service \(in Rupees\)[:\s]*([0-9,]+)',
-                    r'([0-9,]{6,})'
-                ]
-            }
-        }
-    
-    def extract_answer_for_question(self, question: str, pages: List[Dict[str, Any]]) -> str:
-        """Extract answer for a specific question"""
-        start_time = time.time()
-        
-        if question not in self.questions_config:
-            return "Question not configured"
-        
-        config = self.questions_config[question]
-        target_page = config["page"]
-        patterns = config["patterns"]
-        
-        # Get the target page
-        if target_page > len(pages):
-            print(f"Target page {target_page} not found, total pages: {len(pages)}")
-            return "Target page not found"
-        
-        page_text = pages[target_page - 1]["text"]
-        
-        # Special handling for the last column (highest turnover)
-        if "Turnover of highest contributing product or service" in question:
-            return self._extract_highest_turnover(page_text)
-        
-        # Try patterns in order
-        for pattern in patterns:
-            matches = re.finditer(pattern, page_text, re.IGNORECASE | re.MULTILINE)
-            for match in matches:
-                result = match.group(1).strip()
-                if result and len(result) > 0:
-                    cleaned_result = self._clean_result(question, result)
-                    if self._validate_result(question, cleaned_result):
-                        print(f"Found answer for '{question[:30]}...' in {time.time() - start_time:.2f} seconds")
-                        return cleaned_result
-        
-        print(f"No answer found for '{question[:30]}...' in {time.time() - start_time:.2f} seconds")
-        return "Information not found"
-    
-    def _extract_highest_turnover(self, page_text: str) -> str:
-        """Special extraction for highest turnover - search for the exact question and get the number after it"""
-        
-        # Strategy 1: Look for the exact question followed by a number
-        exact_pattern = r'Turnover of highest contributing product or service \(in Rupees\)[\s\n\r]*([0-9,]+)'
-        match = re.search(exact_pattern, page_text, re.IGNORECASE)
-        if match:
-            result = match.group(1).replace(',', '')
-            if result.isdigit() and len(result) >= 6:
-                return result
-        
-        # Strategy 2: Look for the question anywhere and find the closest number
-        question_pattern = r'Turnover of highest contributing product or service'
-        question_match = re.search(question_pattern, page_text, re.IGNORECASE)
-        if question_match:
-            # Get text after the question (next 200 characters)
-            start_pos = question_match.end()
-            text_after = page_text[start_pos:start_pos + 200]
-            
-            # Find the first substantial number
-            number_match = re.search(r'([0-9,]{6,})', text_after)
-            if number_match:
-                result = number_match.group(1).replace(',', '')
-                if result.isdigit() and len(result) >= 6:
-                    return result
-        
-        # Strategy 3: Look for any large number in the page (fallback)
-        all_numbers = re.findall(r'([0-9,]{8,})', page_text)
-        for num in all_numbers:
-            cleaned = num.replace(',', '')
-            if cleaned.isdigit() and 6 <= len(cleaned) <= 12:
-                # Return the first reasonable number found
-                return cleaned
-        
-        return "Information not found"
-    
-    def _clean_result(self, question: str, result: str) -> str:
-        """Clean the extracted result"""
-        # Remove extra whitespace
-        result = result.strip()
-        
-        # Question-specific cleaning
-        if "CIN" in question:
-            # Keep only alphanumeric for CIN
-            result = re.sub(r'[^A-Z0-9]', '', result.upper())
-        
-        elif "code" in question.lower():
-            # Keep only digits for codes
-            result = re.sub(r'[^0-9]', '', result)
-        
-        elif "turnover" in question.lower():
-            # Keep only digits for turnover (remove commas, currency symbols)
-            result = re.sub(r'[^0-9]', '', result)
-        
-        elif "description" in question.lower():
-            # Clean descriptions
-            result = re.sub(r'[^\w\s\-.,]', '', result)
-            result = result[:100]  # Limit length
-        
-        return result
-    
-    def _validate_result(self, question: str, result: str) -> bool:
-        """Validate the extracted result"""
-        if not result or len(result.strip()) == 0:
-            return False
-        
-        # Question-specific validation
-        if "CIN" in question:
-            return len(result) == 21 and result[0] in ['L', 'U']
-        
-        elif "4 digit code" in question:
-            return len(result) == 4 and result.isdigit()
-        
-        elif "8 digit code" in question:
-            return len(result) == 8 and result.isdigit()
-        
-        elif "turnover" in question.lower():
-            return result.isdigit() and len(result) >= 6
-        
-        elif "description" in question.lower():
-            return 5 <= len(result) <= 150
-        
-        elif "financial year" in question.lower():
-            return bool(re.search(r'\d{4}', result))
-        
-        return True
+    if split_pages:
+        return [{"context": page["text"], "page_num": page["page_num"]} for page in pages]
+    else:
+        # Merge all pages into single context
+        all_text = "\n".join([page["text"] for page in pages])
+        return [{"context": all_text}]
 
-class FastFormExtractor:
-    """Fast extractor for standardized forms"""
+class LlamaQueryPipeline:
+    def __init__(self, pdf_path: str, queries_csv_path: str, llm_url: str = LLAMA_URL):
+        self.llm_generator = LLMGenerator(url=llm_url)
+        self.docs = mergeDocs(pdf_path, split_pages=False)
+        queries_df = pd.read_excel(queries_csv_path)
+        self.queries = queries_df["prompt"].tolist()
     
-    def __init__(self):
-        self.pdf_extractor = PDFExtractor()
-        self.pattern_extractor = SimplePatternExtractor()
+    def query_llama(self) -> pd.DataFrame:
+        """
+        Queries the Llama API for a list of queries using the provided context.
         
-        # Define the questions in order
-        self.questions = [
-            "Corporate identity number (CIN) of company",
-            "Financial year to which financial statements relates",
-            "Product or service category code (ITC/ NPCS 4 digit code)",
-            "Description of the product or service category",
-            "Turnover of the product or service category (in Rupees)",
-            "Highest turnover contributing product or service code (ITC/ NPCS 8 digit code)",
-            "Description of the product or service",
-            "Turnover of highest contributing product or service (in Rupees)"
-        ]
-    
-    def process_pdf(self, pdf_path: str) -> Dict[str, str]:
-        """Process a PDF file using simple pattern matching"""
-        total_start_time = time.time()
-        print(f"Processing PDF: {pdf_path}")
+        Returns:
+            pd.DataFrame: DataFrame containing usage statistics and responses for each query.
+        """
+        sys_prompt = f"""You must answer the question strictly based on the below given context.
+Context:
+{self.docs[0]["context"]}\n\n"""
         
-        try:
-            # Extract text from PDF
-            pages = self.pdf_extractor.extract_text_from_pdf(pdf_path)
-            
-            # Process each question
-            answers = {}
-            for question in self.questions:
-                answer = self.pattern_extractor.extract_answer_for_question(question, pages)
-                answers[question] = answer
-                print(f"  {question[:50]}... -> {answer}")
-            
-            print(f"Completed processing {pdf_path} in {time.time() - total_start_time:.2f} seconds")
-            return answers
-            
-        except Exception as e:
-            print(f"Error processing PDF {pdf_path}: {e}")
-            return {question: f"Error: {str(e)}" for question in self.questions}
-    
-    def process_pdfs_batch(self, pdf_dir: str, output_excel: str):
-        """Process multiple PDF files and save results to an Excel file"""
-        batch_start_time = time.time()
-        print(f"Processing all PDFs in directory: {pdf_dir}")
+        prompt_template = """Question: {query}
+Answer:"""
         
-        if not os.path.isdir(pdf_dir):
-            print(f"Directory not found: {pdf_dir}")
-            return
-        
-        pdf_files = [f for f in os.listdir(pdf_dir) if f.lower().endswith('.pdf')]
-        if not pdf_files:
-            print(f"No PDF files found in {pdf_dir}")
-            return
-        
-        print(f"Found {len(pdf_files)} PDF files")
-        
+        # Initialize conversation history
+        conversation_history = ""
         results = []
-        for i, pdf_file in enumerate(pdf_files):
-            pdf_path = os.path.join(pdf_dir, pdf_file)
-            print(f"\nProcessing {i+1}/{len(pdf_files)}: {pdf_file}")
+        
+        for query in self.queries:
+            start = time.perf_counter()
+            try:
+                # Build the full prompt with conversation history
+                if conversation_history:
+                    full_prompt = f"{sys_prompt}\n{conversation_history}\n{prompt_template.format(query=query)}"
+                else:
+                    full_prompt = f"{sys_prompt}\n{prompt_template.format(query=query)}"
+                
+                # Get response from Llama
+                response_text = self.llm_generator.run(full_prompt)
+                end = time.perf_counter()
+                
+                # Calculate token approximations (rough estimation)
+                input_tokens = len(full_prompt.split())
+                completion_tokens = len(response_text.split()) if response_text else 0
+                
+                usage = dict(
+                    query=query,
+                    response=response_text,
+                    completion_tokens=completion_tokens,
+                    input_tokens=input_tokens,
+                    response_time=f"{end - start:.2f}"
+                )
+                
+                # Update conversation history for next iteration
+                conversation_history += f"\nQuestion: {query}\nAnswer: {response_text}\n"
+                
+            except Exception as e:
+                end = time.perf_counter()
+                usage = dict(
+                    query=query,
+                    response=f"Error: {str(e)}",
+                    completion_tokens=None,
+                    input_tokens=None,
+                    response_time=f"{end - start:.2f}"
+                )
             
-            answers = self.process_pdf(pdf_path)
-            result = {"PDF Filename": pdf_file}
-            result.update(answers)
-            results.append(result)
-        
-        # Save to Excel
-        if results:
-            df = pd.DataFrame(results)
-            columns = ["PDF Filename"] + self.questions
-            df = df[columns]
-            df.to_excel(output_excel, index=False)
-            print(f"\nResults saved to {output_excel}")
-        
-        print(f"Total processing completed in {time.time() - batch_start_time:.2f} seconds")
-        print(f"Average time per PDF: {(time.time() - batch_start_time) / len(pdf_files):.2f} seconds")
+            results.append(usage)
+            
+        return pd.DataFrame(results)
 
-def main():
-    import argparse
-    parser = argparse.ArgumentParser(description="Simple Form-Based PDF Extractor")
-    parser.add_argument("--pdf_dir", type=str, default="C:\\Users\\c-ManasA\\OneDrive - crisil.com\\Desktop\\New folder\\pdf's", help="Directory containing PDF files")
-    parser.add_argument("--output", type=str, default="simple_extraction_results.xlsx", help="Output Excel file")
-    parser.add_argument("--single_pdf", type=str, default=None, help="Process a single PDF")
-    args = parser.parse_args()
-    
-    try:
-        print("Starting Simple Form-Based PDF Extraction")
-        pipeline = FastFormExtractor()
-        
-        if args.single_pdf:
-            if not os.path.isfile(args.single_pdf):
-                print(f"PDF file not found: {args.single_pdf}")
-                return
-            
-            answers = pipeline.process_pdf(args.single_pdf)
-            
-            # Save single PDF results
-            result = {"PDF Filename": os.path.basename(args.single_pdf)}
-            result.update(answers)
-            df = pd.DataFrame([result])
-            columns = ["PDF Filename"] + pipeline.questions
-            df = df[columns]
-            df.to_excel(args.output, index=False)
-            print(f"Results saved to {args.output}")
-        else:
-            pipeline.process_pdfs_batch(args.pdf_dir, args.output)
-        
-        print("Processing completed successfully!")
-        
-    except Exception as e:
-        print(f"Pipeline error: {e}")
+# Example usage queries (for testing)
+queries = [
+    "Extract Scope 1 emissions ?",
+    "Extract Scope 2 emissions for all the given years?",
+    "Extract the scope 3 emissions for all the given years.",
+    "Extract the targets set for CO2 emission control ?"
+]
 
+# Example usage:
 if __name__ == "__main__":
-    main()
+    # Initialize pipeline
+    pipeline = LlamaQueryPipeline(
+        pdf_path="path/to/your/document.pdf",
+        queries_csv_path="path/to/your/queries.xlsx"
+    )
+    
+    # Run queries
+    results_df = pipeline.query_llama()
+    print(results_df)
+    
+    # Save results
+    results_df.to_csv("llama_query_results.csv", index=False)
