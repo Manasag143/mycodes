@@ -70,7 +70,6 @@ class HostedLLM(LLM):
             return output.strip()
             
         except Exception as e:
-            logger.error(f"LLM Call Failed: {e}")
             return f"LLM Call Failed: {e}"
 
 class PDFExtractor:
