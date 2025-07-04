@@ -227,7 +227,6 @@ if __name__ == "__main__":
 
 
 
-
 import os
 import re
 import time
@@ -349,18 +348,21 @@ def mergeDocs(pdf_path: str, split_pages: bool = False) -> List[Dict[str, Any]]:
 class LlamaQueryPipeline:
     """Main pipeline class for querying PDF content with Llama"""
     
-    def __init__(self, pdf_path: str, queries_csv_path: str, llm_endpoint: str = "https://llmgateway.crisil.local/api/v1/llm", previous_results_path: str = None):
+    def __init__(self, pdf_path: str, queries_csv_path: str = None, llm_endpoint: str = "https://llmgateway.crisil.local/api/v1/llm", previous_results_path: str = None):
         """Initialize the pipeline"""
         self.llm = HostedLLM(endpoint=llm_endpoint)
         self.docs = mergeDocs(pdf_path, split_pages=False)
         
-        # Load queries from Excel or CSV
-        if queries_csv_path.endswith('.xlsx'):
-            queries_df = pd.read_excel(queries_csv_path)
+        # Load queries from Excel or CSV (only if provided)
+        if queries_csv_path:
+            if queries_csv_path.endswith('.xlsx'):
+                queries_df = pd.read_excel(queries_csv_path)
+            else:
+                queries_df = pd.read_csv(queries_csv_path)
+            self.queries = queries_df["prompt"].tolist()
         else:
-            queries_df = pd.read_csv(queries_csv_path)
+            self.queries = []
             
-        self.queries = queries_df["prompt"].tolist()
         self.pdf_path = pdf_path
         
         # Load previous results if provided
@@ -567,15 +569,15 @@ def main():
 
 def main_chained():
     """Example usage for chained queries using previous results"""
-    # Configuration
-    pdf_path = r"C:\Users\DeshmukhK\Downloads\EWS\Earning call transcripts\Sterling Q2 FY23.pdf"
+    # Configuration - Updated for relative paths
+    pdf_path = r"Kalyan June 24.pdf"
     previous_results_path = r"llama_query_results.csv"  # Your existing results file
-    new_queries_csv_path = r"C:\Users\DeshmukhK\Downloads\EWS_LLAMA_prompts_iteration2.xlsx"  # New prompts for chaining
+    new_queries_csv_path = r"EWS_prompts_v2_iteration2.xlsx"  # New prompts for chaining
     
     # Initialize pipeline with previous results
     pipeline = LlamaQueryPipeline(
         pdf_path=pdf_path,
-        queries_csv_path="",  # Not needed for chaining
+        queries_csv_path=None,  # Not needed for chaining
         previous_results_path=previous_results_path
     )
     
@@ -589,16 +591,50 @@ def main_chained():
     
     return chained_results_df
 
-def run_complete_pipeline():
-    """Run the complete 3-iteration pipeline"""
-    # Configuration
-    pdf_path = r"C:\Users\DeshmukhK\Downloads\EWS\Earning call transcripts\Sterling Q2 FY23.pdf"
-    first_results_path = r"llama_query_results.csv"  # Your existing 1st iteration results
+def run_all_iterations():
+    """Run all 3 iterations together: 1st + 2nd + 3rd"""
+    # Configuration - Updated for relative paths
+    pdf_path = r"Kalyan June 24.pdf"
+    queries_csv_path = r"EWS_prompts_v2.xlsx"
     
-    # 2nd Iteration Prompt
+    print("Starting complete 3-iteration pipeline...")
+    
+    # ITERATION 1: Run original queries
+    print("Running 1st iteration...")
+    pipeline_1st = LlamaQueryPipeline(
+        pdf_path=pdf_path,
+        queries_csv_path=queries_csv_path
+    )
+    
+    # Run 1st iteration
+    first_results_df = pipeline_1st.query_llama(maintain_conversation=True, enable_chaining=False)
+    
+    # Save 1st iteration results
+    first_output_file = pipeline_1st.save_results(first_results_df, "llama_query_results.csv")
+    print(f"1st iteration completed. Results saved to: {first_output_file}")
+    
+    # Get first response for chaining
+    first_response = first_results_df.iloc[0]['response']
+    
+    # ITERATION 2: Deduplication
+    print("Running 2nd iteration...")
     second_prompt = "Remove the duplicates from the above context. Also if the Original Quote and Keyword identifies is same remove them."
     
-    # 3rd Iteration Prompt  
+    second_full_prompt = f"""You must answer the question strictly based on the below given context.
+
+Context:
+{pipeline_1st.docs[0]["context"]}
+
+Previous Analysis: {first_response}
+
+Based on the above analysis and the original context, please answer: {second_prompt}
+
+Answer:"""
+    
+    second_response = pipeline_1st.llm._call(second_full_prompt)
+    
+    # ITERATION 3: Categorization
+    print("Running 3rd iteration...")
     third_prompt = """I have a list of identified red flags related to a company's financial health and operations. I need help categorizing these red flags into the following categories:
 1. Balance Sheet Issues: Red flags related to the company's assets, liabilities, equity, and overall financial position.
 2. P&L (Income Statement) Issues: Red flags related to the company's revenues, expenses, profits, and overall financial performance.
@@ -620,38 +656,10 @@ Provide a comprehensive and detailed summary of each category of red flags, ensu
 8. Summary should be factual, Avoid any subjective interpretations or opinions.
 By following these guidelines, provide a summary that accurately and comprehensively represents each category of red flags, including all relevant details and quantitative data present from each red flag identified."""
 
-    # Initialize pipeline
-    pipeline = LlamaQueryPipeline(
-        pdf_path=pdf_path,
-        queries_csv_path="",  # Not needed
-        previous_results_path=first_results_path
-    )
-    
-    # Load 1st iteration results
-    first_results = pd.read_csv(first_results_path)
-    first_response = first_results.iloc[0]['response']  # Get response from 3rd column
-    
-    print("Running 2nd iteration...")
-    # 2nd Iteration
-    second_full_prompt = f"""You must answer the question strictly based on the below given context.
-
-Context:
-{pipeline.docs[0]["context"]}
-
-Previous Analysis: {first_response}
-
-Based on the above analysis and the original context, please answer: {second_prompt}
-
-Answer:"""
-    
-    second_response = pipeline.llm._call(second_full_prompt)
-    
-    print("Running 3rd iteration...")
-    # 3rd Iteration  
     third_full_prompt = f"""You must answer the question strictly based on the below given context.
 
 Context:
-{pipeline.docs[0]["context"]}
+{pipeline_1st.docs[0]["context"]}
 
 Previous Analysis: {second_response}
 
@@ -659,26 +667,40 @@ Based on the above analysis and the original context, please answer: {third_prom
 
 Answer:"""
     
-    final_response = pipeline.llm._call(third_full_prompt)
+    final_response = pipeline_1st.llm._call(third_full_prompt)
     
-    # Save final result
+    # Save all results together
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    final_results = pd.DataFrame({
-        "iteration": [2, 3],
-        "prompt": [second_prompt, third_prompt],
-        "response": [second_response, final_response],
-        "timestamp": [timestamp, timestamp]
+    all_results = pd.DataFrame({
+        "iteration": [1, 2, 3],
+        "prompt": [
+            first_results_df.iloc[0]['query'],  # Original query from 1st iteration
+            second_prompt,
+            third_prompt
+        ],
+        "response": [
+            first_response,
+            second_response,
+            final_response
+        ],
+        "timestamp": [timestamp, timestamp, timestamp]
     })
     
-    final_output_file = f"final_chained_results_{timestamp}.csv"
-    final_results.to_csv(final_output_file, index=False)
+    # Save complete results
+    complete_output_file = f"complete_pipeline_results_{timestamp}.csv"
+    all_results.to_csv(complete_output_file, index=False)
     
-    print(f"Final results saved to: {final_output_file}")
-    return final_results
+    print(f"Complete pipeline finished!")
+    print(f"1st iteration: {first_output_file}")
+    print(f"Complete results: {complete_output_file}")
+    print(f"Final categorized result is in row 3 of {complete_output_file}")
+    
+    return all_results
 
 if __name__ == "__main__":
-    # For complete pipeline (2nd + 3rd iteration)
-    final_results = run_complete_pipeline()
+    # Run complete pipeline: 1st + 2nd + 3rd iterations
+    all_results = run_all_iterations()
     
-    # For original first iteration (if needed)
-    # results = main()
+    # For individual iterations (if needed)
+    # results = main()  # 1st iteration only
+    # final_results = run_complete_pipeline()  # 2nd + 3rd iterations only
