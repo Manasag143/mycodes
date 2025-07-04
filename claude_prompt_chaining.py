@@ -228,8 +228,6 @@ if __name__ == "__main__":
 
 
 
-
-
 import os
 import re
 import time
@@ -591,16 +589,17 @@ def main_chained():
     
     return chained_results_df
 
-def main_third_iteration():
-    """Example usage for 3rd iteration using 2nd iteration results"""
+def run_complete_pipeline():
+    """Run the complete 3-iteration pipeline"""
     # Configuration
     pdf_path = r"C:\Users\DeshmukhK\Downloads\EWS\Earning call transcripts\Sterling Q2 FY23.pdf"
-    previous_results_path = r"llama_chained_results_iteration2_20250704_143022.csv"  # Your 2nd iteration results
+    first_results_path = r"llama_query_results.csv"  # Your existing 1st iteration results
     
-    # Create Excel file with your 2nd and 3rd prompts
-    third_iteration_prompts = [
-        "Remove the duplicates from the above context. Also if the Original Quote and Keyword identifies is same remove them.",
-        """I have a list of identified red flags related to a company's financial health and operations. I need help categorizing these red flags into the following categories:
+    # 2nd Iteration Prompt
+    second_prompt = "Remove the duplicates from the above context. Also if the Original Quote and Keyword identifies is same remove them."
+    
+    # 3rd Iteration Prompt  
+    third_prompt = """I have a list of identified red flags related to a company's financial health and operations. I need help categorizing these red flags into the following categories:
 1. Balance Sheet Issues: Red flags related to the company's assets, liabilities, equity, and overall financial position.
 2. P&L (Income Statement) Issues: Red flags related to the company's revenues, expenses, profits, and overall financial performance.
 3. Management Issues: Red flags related to the company's leadership, governance, and decision-making processes.
@@ -620,29 +619,66 @@ Provide a comprehensive and detailed summary of each category of red flags, ensu
 7. Category-specific content: Ensure that the summary is generated based solely on the content present within each category, without drawing from external information or other categories.
 8. Summary should be factual, Avoid any subjective interpretations or opinions.
 By following these guidelines, provide a summary that accurately and comprehensively represents each category of red flags, including all relevant details and quantitative data present from each red flag identified."""
-    ]
-    
-    # Create temporary Excel file for 3rd iteration
-    third_df = pd.DataFrame({"prompt": third_iteration_prompts})
-    third_queries_path = "EWS_LLAMA_prompts_iteration3.xlsx"
-    third_df.to_excel(third_queries_path, index=False)
-    
-    # Initialize pipeline with 2nd iteration results
+
+    # Initialize pipeline
     pipeline = LlamaQueryPipeline(
         pdf_path=pdf_path,
-        queries_csv_path="",  # Not needed for chaining
-        previous_results_path=previous_results_path
+        queries_csv_path="",  # Not needed
+        previous_results_path=first_results_path
     )
     
-    # Run 3rd iteration
-    third_results_df = pipeline.query_llama_with_chaining(third_queries_path, iteration_number=3)
+    # Load 1st iteration results
+    first_results = pd.read_csv(first_results_path)
+    first_response = first_results.iloc[0]['response']  # Get response from 3rd column
     
-    # Save 3rd iteration results
+    print("Running 2nd iteration...")
+    # 2nd Iteration
+    second_full_prompt = f"""You must answer the question strictly based on the below given context.
+
+Context:
+{pipeline.docs[0]["context"]}
+
+Previous Analysis: {first_response}
+
+Based on the above analysis and the original context, please answer: {second_prompt}
+
+Answer:"""
+    
+    second_response = pipeline.llm._call(second_full_prompt)
+    
+    print("Running 3rd iteration...")
+    # 3rd Iteration  
+    third_full_prompt = f"""You must answer the question strictly based on the below given context.
+
+Context:
+{pipeline.docs[0]["context"]}
+
+Previous Analysis: {second_response}
+
+Based on the above analysis and the original context, please answer: {third_prompt}
+
+Answer:"""
+    
+    final_response = pipeline.llm._call(third_full_prompt)
+    
+    # Save final result
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    third_output_file = f"llama_chained_results_iteration3_{timestamp}.csv"
-    third_results_df.to_csv(third_output_file, index=False)
+    final_results = pd.DataFrame({
+        "iteration": [2, 3],
+        "prompt": [second_prompt, third_prompt],
+        "response": [second_response, final_response],
+        "timestamp": [timestamp, timestamp]
+    })
     
-    return third_results_df
+    final_output_file = f"final_chained_results_{timestamp}.csv"
+    final_results.to_csv(final_output_file, index=False)
+    
+    print(f"Final results saved to: {final_output_file}")
+    return final_results
 
 if __name__ == "__main__":
-    results = main()
+    # For complete pipeline (2nd + 3rd iteration)
+    final_results = run_complete_pipeline()
+    
+    # For original first iteration (if needed)
+    # results = main()
