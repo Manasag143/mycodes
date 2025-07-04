@@ -11,8 +11,6 @@ import json
 import ast
 from typing import Dict, List, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from langchain.llms.base import LLM
-from langchain.callbacks.manager import CallbackManagerForLLMRun
 
 # Suppress SSL warnings
 warnings.filterwarnings('ignore')
@@ -26,18 +24,13 @@ def getFilehash(file_path: str):
     with open(file_path, 'rb') as f:
         return hashlib.sha3_256(f.read()).hexdigest()
 
-class HostedLLM(LLM):
+class HostedLLM:
     """Custom LLM class for hosted Llama model"""
     
-    def __init__(self, endpoint: str, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, endpoint: str):
         self.endpoint = endpoint
     
-    @property
-    def _llm_type(self) -> str:
-        return "Hosted LLM"
-    
-    def _call(self, prompt: str, stop=None, run_manager: CallbackManagerForLLMRun = None) -> str:
+    def _call(self, prompt: str) -> str:
         """Make API call to hosted LLM"""
         try:
             prompt_template = f"""<|begin_of_text|><|start_header_id|>user<|end_header_id|>
@@ -58,7 +51,7 @@ class HostedLLM(LLM):
             }
             
             response = requests.post(
-                url=self.endpoint, 
+                url="https://llmgateway.crisil.local/api/v1/llm", 
                 headers=headers, 
                 data=payload, 
                 verify=False
