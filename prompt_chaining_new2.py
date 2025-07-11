@@ -230,14 +230,40 @@ Answer:"""
  
     def query_llama(self, maintain_conversation: bool = True, enable_chaining: bool = False) -> pd.DataFrame:
         """Query the Llama API for a list of queries using the provided context"""
-        sys_prompt = f"""You must answer the question strictly based on the below given context.
- 
-Context:
+        sys_prompt = f"""You are a financial analyst expert specializing in identifying red flags from earnings call transcripts and financial documents.
+
+COMPLETE DOCUMENT TO ANALYZE:
 {self.docs[0]["context"]}
- 
+
+Your task is to analyze the ENTIRE document above and identify ALL potential red flags. 
+
+CRITICAL OUTPUT FORMAT REQUIREMENTS:
+- Number each red flag sequentially (1, 2, 3, etc.)
+- Start each entry with: "The potential red flag you observed - [brief description]"
+- Follow with "Original Quote:" and then the exact quote with speaker names
+- Include page references where available: (Page X)
+- Ensure comprehensive analysis of the entire document
+- Do not miss any sections or concerning statements
+
+EXAMPLE FORMAT:
+1. The potential red flag you observed - Debt reduction lower than expected
+Original Quote:
+"Vikrant Kashyap: Have you -- are you able to reduce any debt in quarter one?
+Ramesh Kalyanaraman: So India, we are not reduced, but the cash balance has been increased..." (Page 9)
+
+2. The potential red flag you observed - Margin pressure/Competition intensifying
+Original Quote:
+"Analyst Name: Question about margins...
+Management Response: ..." (Page X)
+
+Continue this exact format for ALL red flags identified throughout the document.
+
 """
        
         prompt_template = """Question: {query}
+
+Analyze the complete document and provide ALL red flags in the exact numbered format specified above. Be thorough and comprehensive - cover the entire document.
+
 Answer:"""
        
         # Initialize conversation history
@@ -376,8 +402,8 @@ Answer:"""
     
     # ITERATION 3: Categorization of red flags
     print("Running 3rd iteration - Categorization...")
-    # UPDATED: Split the original third prompt into categorization only
-    third_prompt = """I have a list of identified red flags related to a company's financial health and operations. I need help categorizing these red flags into the following categories:
+    # UPDATED: Clear prompt that references the deduplicated red flags from iteration 2
+    third_prompt = """Based on the deduplicated red flags identified in the previous analysis, I need help categorizing these red flags into the following 8 categories:
 
 1. Balance Sheet Issues: Red flags related to the company's assets, liabilities, equity, and overall financial position.
 2. P&L (Income Statement) Issues: Red flags related to the company's revenues, expenses, profits, and overall financial performance.
@@ -388,18 +414,24 @@ Answer:"""
 7. Financial Reporting and Transparency Issues: Red flags related to the company's financial reporting, disclosure, and transparency practices.
 8. Strategic Issues: Red flags related to the company's overall strategy, vision, and direction.
 
-Please review the red flags from the previous analysis and assign each one to the most relevant category. Rules for categorization:
+**Task**: Take each red flag from the deduplicated list in the previous analysis and assign it to the most appropriate category above.
+
+**Rules for categorization**:
 - If a red flag could fit into multiple categories, assign it to the one that seems most closely related
 - Do not leave any flag unclassified
-- Do not fit any flag into multiple categories
+- Do not assign any flag to multiple categories
 - Ensure clear classification that groups similar issues together
-- Provide the categorized list with each red flag clearly assigned to its category
 
-Format the output as:
-### Category Name
-- Red flag 1
-- Red flag 2
-etc."""
+**Output Format**:
+### 1. Balance Sheet Issues
+- [Red flag 1 from previous analysis]
+- [Red flag 2 from previous analysis]
+
+### 2. P&L (Income Statement) Issues
+- [Red flag 1 from previous analysis]
+- [Red flag 2 from previous analysis]
+
+Continue this format for all 8 categories, ensuring every red flag from the previous analysis is categorized."""
     
     third_full_prompt = f"""You must answer the question strictly based on the below given context.
 
