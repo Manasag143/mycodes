@@ -21,6 +21,14 @@ warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Check if openpyxl is available for Excel support
+try:
+    import openpyxl
+    EXCEL_SUPPORT = True
+except ImportError:
+    EXCEL_SUPPORT = False
+    print("Warning: openpyxl not installed. Excel files will be saved as CSV. Install with: pip install openpyxl")
+
 def getFilehash(file_path: str):
     """Generate SHA3-256 hash of a file"""
     with open(file_path, 'rb') as f:
@@ -43,16 +51,28 @@ class HostedLLM_Perplexity(LLM):
         return "Hosted LLM"
     
     def _call(self, prompt: str, stop=None, run_manager: CallbackManagerForLLMRun=None) -> str:
-        """Make API call to hosted Perplexity LLM"""
+        """Make API call to hosted Perplexity LLM with token limit handling"""
         try:
+            # Check token count (rough estimation: 1 token ≈ 4 characters)
+            estimated_tokens = len(prompt) // 4
+            max_input_tokens = 14000  # Leave buffer for response tokens (16384 - 2384)
+            
+            if estimated_tokens > max_input_tokens:
+                print(f"Warning: Prompt too long ({estimated_tokens} tokens). Truncating...")
+                # Truncate prompt to fit within limits
+                max_chars = max_input_tokens * 4
+                prompt = prompt[:max_chars] + "\n\n[Note: Content truncated due to length limits]"
+                print(f"Truncated to approximately {len(prompt) // 4} tokens")
+            
             data = {
                 "inputs": prompt,
                 "parameters": {
-                    "temperature": 0.1
+                    "temperature": 0.1,
+                    "max_new_tokens": 2000  # Limit response length
                 }
             }
             
-            response = requests.post(self._endpoint, json=data, verify=False, timeout=30)
+            response = requests.post(self._endpoint, json=data, verify=False, timeout=60)
             
             print(f"Response Status: {response.status_code}")
             print(f"Response Text: {response.text[:500]}...")  # First 500 chars
@@ -101,25 +121,39 @@ class PDFExtractor:
             logger.error(f"PDF extraction error: {e}")
             raise
 
-def mergeDocs(pdf_path: str, split_pages: bool = False) -> List[Dict[str, Any]]:
-    """Merge PDF documents into a single context"""
+def mergeDocs(pdf_path: str, split_pages: bool = False, max_pages: int = None) -> List[Dict[str, Any]]:
+    """Merge PDF documents into a single context with optional page limiting"""
     extractor = PDFExtractor()
     pages = extractor.extract_text_from_pdf(pdf_path)
+    
+    # Limit pages if specified to control document size
+    if max_pages and len(pages) > max_pages:
+        print(f"Warning: PDF has {len(pages)} pages. Limiting to first {max_pages} pages to manage token limits.")
+        pages = pages[:max_pages]
     
     if split_pages:
         return [{"context": page["text"], "page_num": page["page_num"]} for page in pages]
     else:
         # Merge all pages into single context
         all_text = "\n".join([page["text"] for page in pages])
+        
+        # Check if text is too long (rough estimate)
+        estimated_tokens = len(all_text) // 4
+        if estimated_tokens > 10000:  # Leave room for system prompt
+            print(f"Warning: Document very long ({estimated_tokens} tokens). Consider splitting into chunks.")
+            # Optionally truncate here if needed
+            max_chars = 10000 * 4
+            all_text = all_text[:max_chars] + "\n\n[Note: Document truncated due to length]"
+        
         return [{"context": all_text}]
 
 class LlamaQueryPipeline:
     """Main pipeline class for querying PDF content with Perplexity"""
     
-    def __init__(self, pdf_path: str, queries_csv_path: str = None, llm_endpoint: str = "https://as1-lower-llm.crisil.local/perplexity/llama/70b/llm/", previous_results_path: str = None):
+    def __init__(self, pdf_path: str, queries_csv_path: str = None, llm_endpoint: str = "https://as1-lower-llm.crisil.local/perplexity/llama/70b/llm/", previous_results_path: str = None, max_pages: int = None):
         """Initialize the pipeline with Perplexity LLM"""
         self.llm = HostedLLM_Perplexity(endpoint=llm_endpoint)
-        self.docs = mergeDocs(pdf_path, split_pages=False)
+        self.docs = mergeDocs(pdf_path, split_pages=False, max_pages=max_pages)
         
         # Load queries from Excel or CSV (only if provided)
         if queries_csv_path:
@@ -136,7 +170,10 @@ class LlamaQueryPipeline:
         # Load previous results if provided
         self.previous_results = None
         if previous_results_path and os.path.exists(previous_results_path):
-            self.previous_results = pd.read_csv(previous_results_path)
+            if previous_results_path.endswith('.xlsx'):
+                self.previous_results = pd.read_excel(previous_results_path)
+            else:
+                self.previous_results = pd.read_csv(previous_results_path)
 
     def query_llama_with_chaining(self, new_queries_csv_path: str, iteration_number: int = 2) -> pd.DataFrame:
         """Query the Perplexity API using previous results for chaining"""
@@ -343,15 +380,60 @@ Answer:"""
         
         return pd.DataFrame(results)
     
-    def save_results(self, results_df: pd.DataFrame, output_path: str = None):
-        """Save results to CSV file"""
+    def save_results(self, results_df: pd.DataFrame, output_path: str = None, save_format: str = "excel"):
+        """Save results to Excel or CSV file"""
         if output_path is None:
             # Generate filename based on PDF name and timestamp
             pdf_name = os.path.splitext(os.path.basename(self.pdf_path))[0]
             timestamp = time.strftime("%Y%m%d_%H%M%S")
-            output_path = f"perplexity_query_results_{pdf_name}_{timestamp}.csv"
+            if save_format.lower() == "excel" and EXCEL_SUPPORT:
+                output_path = f"perplexity_query_results_{pdf_name}_{timestamp}.xlsx"
+            else:
+                output_path = f"perplexity_query_results_{pdf_name}_{timestamp}.csv"
         
-        results_df.to_csv(output_path, index=False)
+        try:
+            if (output_path.endswith('.xlsx') or save_format.lower() == "excel") and EXCEL_SUPPORT:
+                # Create ExcelWriter with options to handle long text
+                with pd.ExcelWriter(output_path, engine='openpyxl', options={'strings_to_urls': False}) as writer:
+                    results_df.to_excel(writer, sheet_name='Results', index=False)
+                    
+                    # Get the workbook and worksheet
+                    workbook = writer.book
+                    worksheet = writer.sheets['Results']
+                    
+                    # Adjust column widths and text wrapping
+                    for column in worksheet.columns:
+                        max_length = 0
+                        column_letter = column[0].column_letter
+                        
+                        for cell in column:
+                            try:
+                                if len(str(cell.value)) > max_length:
+                                    max_length = len(str(cell.value))
+                            except:
+                                pass
+                        
+                        # Set column width (max 100 for readability)
+                        adjusted_width = min(max_length + 2, 100)
+                        worksheet.column_dimensions[column_letter].width = adjusted_width
+                        
+                        # Enable text wrapping for all cells in this column
+                        for cell in column:
+                            cell.alignment = cell.alignment.copy(wrap_text=True)
+                            
+                print(f"Results saved to Excel: {output_path}")
+            else:
+                results_df.to_csv(output_path, index=False, encoding='utf-8')
+                print(f"Results saved to CSV: {output_path}")
+                
+        except Exception as e:
+            print(f"Error saving to {save_format}: {e}")
+            # Fallback to CSV if Excel fails
+            fallback_path = output_path.replace('.xlsx', '.csv')
+            results_df.to_csv(fallback_path, index=False, encoding='utf-8')
+            print(f"Fallback: Results saved to CSV: {fallback_path}")
+            return fallback_path
+            
         return output_path
 
 def run_four_iteration_pipeline():
@@ -374,13 +456,14 @@ def run_four_iteration_pipeline():
     pipeline_1st = LlamaQueryPipeline(
         pdf_path=pdf_path,
         queries_csv_path=queries_csv_path,
-        llm_endpoint="https://as1-lower-llm.crisil.local/perplexity/llama/70b/llm/"
+        llm_endpoint="https://as1-lower-llm.crisil.local/perplexity/llama/70b/llm/",
+        max_pages=50  # Limit pages to manage token count - adjust as needed
     )
     
     # Run 1st iteration
     first_results_df = pipeline_1st.query_llama(maintain_conversation=True, enable_chaining=False)
     
-    first_output_file = pipeline_1st.save_results(first_results_df, "perplexity_query_results_iteration1.csv")
+    first_output_file = pipeline_1st.save_results(first_results_df, "perplexity_query_results_iteration1.xlsx", "excel")
     print(f"1st iteration completed. Results saved to: {first_output_file}")
     
     # Get first response for chaining
@@ -517,8 +600,49 @@ Answer:"""
     })
     
     # Save complete results
-    complete_output_file = f"complete_perplexity_pipeline_results_{timestamp}.csv"
-    all_results.to_csv(complete_output_file, index=False)
+    complete_output_file = f"complete_perplexity_pipeline_results_{timestamp}.xlsx"
+    
+    try:
+        # Save to Excel with proper formatting
+        with pd.ExcelWriter(complete_output_file, engine='openpyxl', options={'strings_to_urls': False}) as writer:
+            all_results.to_excel(writer, sheet_name='Complete_Pipeline', index=False)
+            
+            # Get the workbook and worksheet
+            workbook = writer.book
+            worksheet = writer.sheets['Complete_Pipeline']
+            
+            # Adjust column widths and enable text wrapping
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                
+                # Set column width (max 150 for response columns)
+                if column_letter in ['D', 'E']:  # Response columns typically
+                    adjusted_width = min(max_length + 2, 150)
+                else:
+                    adjusted_width = min(max_length + 2, 50)
+                    
+                worksheet.column_dimensions[column_letter].width = adjusted_width
+                
+                # Enable text wrapping
+                for cell in column:
+                    cell.alignment = cell.alignment.copy(wrap_text=True)
+        
+        print(f"Complete results saved to Excel: {complete_output_file}")
+        
+    except Exception as e:
+        print(f"Error saving to Excel: {e}")
+        # Fallback to CSV
+        complete_output_file = f"complete_perplexity_pipeline_results_{timestamp}.csv"
+        all_results.to_csv(complete_output_file, index=False, encoding='utf-8')
+        print(f"Fallback: Complete results saved to CSV: {complete_output_file}")
     
     print(f"Complete 4-iteration pipeline with Perplexity finished!")
     print(f"1st iteration: {first_output_file}")
@@ -566,8 +690,40 @@ def main_chained():
     
     # Save chained results
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    chained_output_file = f"perplexity_chained_results_iteration2_{timestamp}.csv"
-    chained_results_df.to_csv(chained_output_file, index=False)
+    chained_output_file = f"perplexity_chained_results_iteration2_{timestamp}.xlsx"
+    
+    try:
+        with pd.ExcelWriter(chained_output_file, engine='openpyxl', options={'strings_to_urls': False}) as writer:
+            chained_results_df.to_excel(writer, sheet_name='Chained_Results', index=False)
+            
+            # Format the Excel file
+            workbook = writer.book
+            worksheet = writer.sheets['Chained_Results']
+            
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                
+                adjusted_width = min(max_length + 2, 100)
+                worksheet.column_dimensions[column_letter].width = adjusted_width
+                
+                for cell in column:
+                    cell.alignment = cell.alignment.copy(wrap_text=True)
+        
+        print(f"Chained results saved to Excel: {chained_output_file}")
+        
+    except Exception as e:
+        print(f"Error saving to Excel: {e}")
+        chained_output_file = f"perplexity_chained_results_iteration2_{timestamp}.csv"
+        chained_results_df.to_csv(chained_output_file, index=False, encoding='utf-8')
+        print(f"Fallback: Chained results saved to CSV: {chained_output_file}")
     
     return chained_results_df
 
