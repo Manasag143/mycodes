@@ -8,6 +8,8 @@ import logging
 import json
 import ast
 from datetime import datetime
+from langchain.llms.base import LLM
+from langchain.callbacks.manager import CallbackManagerForLLMRun
 
 # Suppress SSL warnings
 warnings.filterwarnings('ignore')
@@ -16,49 +18,53 @@ warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class HostedLLM:
-    """Custom LLM class for hosted Llama model"""
-   
-    def __init__(self, endpoint: str):
-        self.endpoint = endpoint
-   
-    def _call(self, prompt: str) -> str:
-        """Make API call to hosted LLM"""
+def clean_response(text: str) -> str:
+    """Clean the response text from LLM"""
+    # Remove common prompt artifacts and clean up response
+    text = text.strip()
+    
+    # Remove prompt echoes if they exist
+    if "user<|end_header_id|>" in text:
+        text = text.split("user<|end_header_id|>")[-1]
+    if "<|start_header_id|>assistant<|end_header_id|>" in text:
+        text = text.split("<|start_header_id|>assistant<|end_header_id|>")[-1]
+    
+    return text.strip()
+
+class HostedLLM_Perplexity(LLM):
+    """Custom LLM class for hosted Perplexity model"""
+    
+    def __init__(self, endpoint: str, **kwargs):
+        super().__init__(**kwargs)
+        self._endpoint = endpoint
+    
+    @property
+    def _llm_type(self) -> str:
+        return "Hosted LLM Perplexity"
+    
+    def _call(self, prompt: str, stop=None, run_manager: CallbackManagerForLLMRun = None) -> str:
         try:
-            prompt_template = f"""<|begin_of_text|><|start_header_id|>user<|end_header_id|>
-{prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-"""
-           
-            payload = json.dumps({
-                "provider": "tgi",
-                "deployment": "Llama 3.3 v1",
-                "spec_version": 1,
-                "input_text": prompt_template,
-                "params": {"temperature": 0.1}
-            })
-           
-            headers = {
-                'token': '0e53d2cf9f724a94a6ca0a9c880fdee7',
-                'Content-Type': 'application/json'
+            data = {
+                "inputs": prompt,
+                "parameters": {
+                    "temperature": 0.1
+                }
             }
-           
-            response = requests.post(
-                url="https://llmgateway.crisil.local/api/v1/llm",
-                headers=headers,
-                data=payload,
-                verify=False
-            )
-           
+            
+            response = requests.post(self._endpoint, json=data, verify=False)
+            
             if response.status_code != 200:
                 return f"LLM Call Failed: HTTP {response.status_code} - {response.text}"
-           
+            
             response_v = ast.literal_eval(response.text)
-            resp_o = response_v['output']
-            output = str(resp_o).replace(prompt_template, "")
+            print(f"Perplexity Response: {response_v}")
+            
+            text = response_v[0]["generated_text"]
+            output = clean_response(text)
             return output.strip()
-           
+            
         except Exception as e:
-            return f"LLM Call Failed - Error: {e}"
+            return f"LLM Call Failed: {e}"
 
 class PDFExtractor:
     """Class for extracting text from PDF files"""
@@ -81,11 +87,11 @@ class PDFExtractor:
             raise
 
 class FinancialRedFlagAnalyzer:
-    """Main pipeline class for financial red flag analysis"""
+    """Main pipeline class for financial red flag analysis using Perplexity"""
    
-    def __init__(self, llm_endpoint: str = "https://llmgateway.crisil.local/api/v1/llm"):
-        """Initialize the analyzer"""
-        self.llm = HostedLLM(endpoint=llm_endpoint)
+    def __init__(self, llm_endpoint: str = "https://as1-lower-llm.crisil.local/perplexity/llama/70b/llm/"):
+        """Initialize the analyzer with Perplexity LLM"""
+        self.llm = HostedLLM_Perplexity(endpoint=llm_endpoint)
         self.pdf_extractor = PDFExtractor()
         
         # Financial analyst prompt with all keywords
@@ -473,15 +479,19 @@ Answer:"""
         return output_path
 
 def main():
-    """Main function to run the analysis"""
-    # Initialize analyzer
-    analyzer = FinancialRedFlagAnalyzer()
+    """Main function to run the analysis with Perplexity"""
+    # Initialize analyzer with Perplexity endpoint
+    analyzer = FinancialRedFlagAnalyzer(
+        llm_endpoint="https://as1-lower-llm.crisil.local/perplexity/llama/70b/llm/"
+    )
     
     # Specify your PDF path here
     pdf_path = "your_earnings_call_transcript.pdf"  # Update this path
     
     try:
-        # Run analysis
+        print("Starting Financial Red Flag Analysis with Perplexity LLM...")
+        
+        # Run complete 4-iteration analysis
         results_df = analyzer.analyze_pdf(pdf_path)
         
         # Save to Excel
@@ -491,6 +501,7 @@ def main():
         print(f"- Document analyzed: {pdf_path}")
         print(f"- Total processing time: {results_df['processing_time_seconds'].sum():.2f} seconds")
         print(f"- Output file: {output_file}")
+        print(f"- LLM Used: Perplexity (Llama 70B)")
         
         # Display iteration summary
         print(f"\nIteration Summary:")
