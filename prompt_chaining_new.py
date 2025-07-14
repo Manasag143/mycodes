@@ -1,25 +1,13 @@
 import os
-import re
 import time
 import pandas as pd
 import fitz  # PyMuPDF
 import requests
 import warnings
-import hashlib
-import logging
-import jsonimport os
-import re
-import time
-import pandas as pd
-import fitz  # PyMuPDF
-import requests
-import warnings
-import hashlib
 import logging
 import json
 import ast
-from typing import Dict, List, Any
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 
 # Suppress SSL warnings
 warnings.filterwarnings('ignore')
@@ -28,422 +16,216 @@ warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def getFilehash(file_path: str):
-    """Generate SHA3-256 hash of a file"""
-    with open(file_path, 'rb') as f:
-        return hashlib.sha3_256(f.read()).hexdigest()
-
-def clean_response(text: str) -> str:
-    """Clean the response text by removing unwanted patterns"""
-    # Remove any prompt repetition or unwanted prefixes
-    # Add your specific cleaning logic here
-    return text
-
 class HostedLLM:
-    """Custom LLM class for hosted Perplexity model"""
-    
+    """Custom LLM class for hosted Llama model"""
+   
     def __init__(self, endpoint: str):
         self.endpoint = endpoint
-    
+   
     def _call(self, prompt: str) -> str:
-        """Make API call to hosted Perplexity LLM"""
+        """Make API call to hosted LLM"""
         try:
-            # Check token count (rough estimation: 1 token ≈ 4 characters)
-            estimated_tokens = len(prompt) // 4
-            max_input_tokens = 14000  # Leave buffer for response tokens
-            
-            if estimated_tokens > max_input_tokens:
-                print(f"Warning: Prompt too long ({estimated_tokens} tokens). Truncating...")
-                # Truncate prompt to fit within limits
-                max_chars = max_input_tokens * 4
-                prompt = prompt[:max_chars] + "\n\n[Note: Content truncated due to length limits]"
-                print(f"Truncated to approximately {len(prompt) // 4} tokens")
-            
-            data = {
-                "inputs": prompt,
-                "parameters": {
-                    "temperature": 0.1,
-                    "max_new_tokens": 2000  # Limit response length
-                }
+            prompt_template = f"""<|begin_of_text|><|start_header_id|>user<|end_header_id|>
+{prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+"""
+           
+            payload = json.dumps({
+                "provider": "tgi",
+                "deployment": "Llama 3.3 v1",
+                "spec_version": 1,
+                "input_text": prompt_template,
+                "params": {"temperature": 0.1}
+            })
+           
+            headers = {
+                'token': '0e53d2cf9f724a94a6ca0a9c880fdee7',
+                'Content-Type': 'application/json'
             }
-            
-            response = requests.post(self.endpoint, json=data, verify=False)
-            
-            print(f"Response Status: {response.status_code}")
-            print(f"Response Text: {response.text[:500]}...")  # First 500 chars
-            
+           
+            response = requests.post(
+                url="https://llmgateway.crisil.local/api/v1/llm",
+                headers=headers,
+                data=payload,
+                verify=False
+            )
+           
             if response.status_code != 200:
                 return f"LLM Call Failed: HTTP {response.status_code} - {response.text}"
-            
+           
             response_v = ast.literal_eval(response.text)
-            print(response_v)
-            text = response_v[0]["generated_text"]
-            output = clean_response(text)
+            resp_o = response_v['output']
+            output = str(resp_o).replace(prompt_template, "")
             return output.strip()
-            
-        except requests.exceptions.RequestException as e:
-            return f"LLM Call Failed - Network Error: {e}"
-        except json.JSONDecodeError as e:
-            return f"LLM Call Failed - JSON Error: {e}"
-        except KeyError as e:
-            return f"LLM Call Failed - Missing Key: {e}"
+           
         except Exception as e:
-            return f"LLM Call Failed - General Error: {e}"
+            return f"LLM Call Failed - Error: {e}"
 
 class PDFExtractor:
     """Class for extracting text from PDF files"""
-    
-    def extract_text_from_pdf(self, pdf_path: str) -> List[Dict[str, Any]]:
-        """Extract text from each page of a PDF file"""
-        start_time = time.time()
+   
+    def extract_text_from_pdf(self, pdf_path: str) -> str:
+        """Extract text from PDF file"""
         try:
             doc = fitz.open(pdf_path)
-            pages = []
-            
+            all_text = ""
+           
             for page_num, page in enumerate(doc):
-                text = page.get_text()
-                pages.append({
-                    "page_num": page_num + 1,
-                    "text": text
-                })
-            
-            # Explicitly close the document to free memory
+                page_text = page.get_text()
+                all_text += f"\n--- Page {page_num + 1} ---\n{page_text}"
+           
             doc.close()
-            logger.info(f"PDF text extraction took {time.time() - start_time:.2f} seconds")
-            return pages
-            
+            return all_text
+           
         except Exception as e:
             logger.error(f"PDF extraction error: {e}")
             raise
 
-def mergeDocs(pdf_path: str, split_pages: bool = False, max_pages: int = None) -> List[Dict[str, Any]]:
-    """Merge PDF documents into a single context with optional page limiting"""
-    extractor = PDFExtractor()
-    pages = extractor.extract_text_from_pdf(pdf_path)
-    
-    # Limit pages if specified to control document size
-    if max_pages and len(pages) > max_pages:
-        print(f"Warning: PDF has {len(pages)} pages. Limiting to first {max_pages} pages to manage token limits.")
-        pages = pages[:max_pages]
-    
-    if split_pages:
-        return [{"context": page["text"], "page_num": page["page_num"]} for page in pages]
-    else:
-        # Merge all pages into single context
-        all_text = "\n".join([page["text"] for page in pages])
-        
-        # Check if text is too long (rough estimate)
-        estimated_tokens = len(all_text) // 4
-        if estimated_tokens > 10000:  # Leave room for system prompt
-            print(f"Warning: Document very long ({estimated_tokens} tokens). Consider splitting into chunks.")
-            # Optionally truncate here if needed
-            max_chars = 10000 * 4
-            all_text = all_text[:max_chars] + "\n\n[Note: Document truncated due to length]"
-        
-        return [{"context": all_text}]
-
-class LlamaQueryPipeline:
-    """Main pipeline class for querying PDF content with Perplexity"""
-    
-    def __init__(self, pdf_path: str, queries_csv_path: str = None, llm_endpoint: str = "https://as1-lower-llm.crisil.local/perplexity/llama/70b/llm/", previous_results_path: str = None, max_pages: int = None):
-        """Initialize the pipeline with Perplexity LLM"""
+class FinancialRedFlagAnalyzer:
+    """Main pipeline class for financial red flag analysis"""
+   
+    def __init__(self, llm_endpoint: str = "https://llmgateway.crisil.local/api/v1/llm"):
+        """Initialize the analyzer"""
         self.llm = HostedLLM(endpoint=llm_endpoint)
-        self.docs = mergeDocs(pdf_path, split_pages=False, max_pages=max_pages)
+        self.pdf_extractor = PDFExtractor()
         
-        # Load queries from Excel or CSV (only if provided)
-        if queries_csv_path:
-            if queries_csv_path.endswith('.xlsx'):
-                queries_df = pd.read_excel(queries_csv_path)
-            else:
-                queries_df = pd.read_csv(queries_csv_path)
-            self.queries = queries_df["prompt"].tolist()
-        else:
-            self.queries = []
-            
-        self.pdf_path = pdf_path
-        
-        # Load previous results if provided
-        self.previous_results = None
-        if previous_results_path and os.path.exists(previous_results_path):
-            if previous_results_path.endswith('.xlsx'):
-                self.previous_results = pd.read_excel(previous_results_path)
-            else:
-                self.previous_results = pd.read_csv(previous_results_path)
+        # Financial analyst prompt with all keywords
+        self.analyst_prompt = """You are an experienced financial analyst tasked with analyzing Earnings call transcripts for a company and identify potential causes for concern: red-flags.
 
-    def query_llama_with_chaining(self, new_queries_csv_path: str, iteration_number: int = 2) -> pd.DataFrame:
-        """Query the Perplexity API using previous results for chaining"""
-        if self.previous_results is None:
-            raise ValueError("No previous results loaded. Please provide previous_results_path in __init__")
+INSTRUCTIONS:
+1. Search for all keywords mentioned in the reference section in the document
+2. Do not miss any keyword mentioned in reference
+3. While searching the keywords keep in mind their definitions as well which are mentioned in reference section
+4. A keyword will appear more than once in the document and you need to look at each instance and flag each occurrence as a new point only if the context is different. Do not duplicate the occurrence of the same context in terms of the keyword
+5. If multiple keywords occur in the same context, do not generate multiple outputs for them instead identify them as keyword1/keyword2/keyword3/keyword4 etc
+6. You will highlight a keyword only if you find it in the document in a negative cause for concern as a red flag, do not highlight positive flags
+7. The output should be crisp and clear, avoid duplication of any keyword for the same context
+
+For each red flag:
+OUTPUT FORMAT:
+1. The potential red flag you observed - the actual key word you found in the document
+2. For the same red flag state the original quote or text that caused you to see the red flag. Also mention the page number where this statement was present
+
+REFERENCE KEYWORDS:
+1. Attrition: Refers to the increasing or high loss of employees, customers, or revenue due to various reasons such as resignation, retirement, or competition, which can negatively impact a company's financial performance.
+2. Adverse: Describes an unfavourable or negative situation, event, or trend that can impact a company's financial performance, such as adverse market conditions or regulatory changes.
+3. Cautious outlook: Indicates a company's conservative or pessimistic view of its future financial performance, often due to uncertainty or potential risks.
+4. Challenging environment: Refers to a difficult or competitive market situation that can impact a company's financial performance, such as intense competition, regulatory challenges, or economic downturns.
+5. Competition intensifying: Describes an increase in competition in a market or industry, which can lead to decreased market share, revenue, or profitability for a company.
+6. Corporate governance: Refers to the system of rules, practices, and processes by which a company is directed and controlled, including issues related to board composition, executive compensation, and audit committee independence.
+7. Cost inflation: Describes an increase in costs, such as labor, materials, or overheads, which can negatively impact a company's profitability.
+8. Customer confidence: Refers to the level of trust and faith that customers have in a company's products or services, which can impact sales and revenue.
+9. Debt reduction is lower than expected: Indicates that a company's efforts to reduce its debt have not been as successful as anticipated, which can impact its financial flexibility and credit rating.
+10. Debt repayment challenges: Describes difficulties a company faces in repaying its debt, which can lead to default, restructuring, or other negative consequences.
+11. Decelerate: Refers to a slowdown in a company's growth rate, which can be due to various factors such as market saturation, competition, or economic downturns.
+12. Decline: Describes a decrease in a company's financial performance, such as revenue, profitability, or market share.
+13. Delay: Refers to a postponement or deferral of a project, investment, or other business initiative, which can impact a company's financial performance.
+14. Difficulties: Describes challenges or problems a company faces in its operations, such as supply chain disruptions, regulatory issues, or talent acquisition.
+15. Disappointing results: Refers to financial performance that falls short of expectations, which can lead to a decline in stock price, investor confidence, or credit rating.
+16. Elusive: Refers to a goal, target, or objective that is difficult to achieve or maintain, such as profitability, market share, or growth.
+17. Group company exposure: Describes a company's financial exposure to its subsidiaries, affiliates, or joint ventures, which can impact its consolidated financial performance.
+18. Guidance revision: Refers to a change in a company's financial guidance, such as revenue or earnings estimates, which can impact investor expectations and stock price.
+19. Impairment charges: Refers to non-cash charges taken by a company to reflect the decline in value of its assets, such as goodwill, property, or equipment.
+20. Increase provisions: Describes an increase in a company's provisions for bad debts, warranties, or other contingent liabilities, which can impact its profitability.
+21. Increasing working capital: Describes an increase in a company's working capital requirements, such as accounts receivable, inventory, or accounts payable, which can impact its liquidity and cash flow.
+22. Inventory levels gone up: Refers to an increase in a company's inventory levels, which can indicate slower sales, overproduction, or supply chain disruptions.
+23. Liquidity concerns: Describes a company's difficulties in meeting its short-term financial obligations, such as paying debts or meeting working capital requirements.
+24. Lost market share: Refers to a decline in a company's market share, which can be due to various factors such as competition, pricing, or product quality.
+25. Management exits: Describes the departure of key executives or managers from a company, which can impact its leadership, strategy, and financial performance.
+26. Margin pressure: Describes a decline in a company's profit margins, which can be due to various factors such as competition, pricing pressure, or cost inflation.
+27. New management: Refers to the appointment of new executives or managers to a company's leadership team, which can impact its strategy, culture, and financial performance.
+28. No confidence: Describes a lack of trust or faith in a company's management, strategy, or financial performance, which can impact investor confidence and stock price.
+29. One-off expenses: Refers to non-recurring expenses or charges taken by a company, such as restructuring costs, impairment charges, or litigation expenses.
+30. One-time write-offs: Refers to non-recurring write-offs or charges taken by a company, such as asset impairments, inventory write-offs, or accounts receivable write-offs.
+31. Operational issues: Describes challenges or problems a company faces in its operations, such as supply chain disruptions, quality control issues, or talent acquisition.
+32. Regulatory uncertainty: Describes uncertainty or ambiguity related to regulatory requirements, laws, or policies that can impact a company's operations, financial performance, or compliance.
+33. Related party transaction: Refers to a transaction between a company and its related parties, such as subsidiaries, affiliates, or joint ventures, which can impact its financial performance and transparency.
+34. Restructuring efforts: Refers to a company's plans or actions to reorganize its operations, finances, or management structure to improve its performance, efficiency, or competitiveness.
+35. Scale down: Describes a company's decision to reduce its operations, investments, or workforce to conserve resources, cut costs, or adapt to changing market conditions.
+36. Service issue: Refers to problems or difficulties a company faces in delivering its products or services, which can impact customer satisfaction, revenue, or reputation.
+37. Shortage: Describes a situation where a company faces a lack of supply, resources, or personnel, which can impact its operations, production, or delivery of products or services.
+38. Stress: Refers to a company's financial difficulties or challenges, such as debt, cash flow problems, or operational issues, which can impact its ability to meet its financial obligations.
+39. Supply chain disruptions: Refers to interruptions or problems in a company's supply chain, which can impact its ability to produce, deliver, or distribute its products or services.
+40. Warranty cost: Refers to the expenses or provisions a company makes for warranties or guarantees provided to its customers, which can impact its profitability or cash flow.
+41. Breach: Describes a company's failure to comply with laws, regulations, or contractual obligations, which can impact its reputation, financial performance, or relationships with stakeholders.
+42. Misappropriation of funds: Describes the unauthorized or improper use of a company's funds, assets, or resources, which can impact its financial performance, reputation, or relationships with stakeholders.
+43. Increase in borrowing cost: Refers to a rise in the cost of borrowing for a company, which can impact its interest expenses, cash flow, or financial flexibility.
+44. One time reversal: Describes a non-recurring or one-time adjustment to a company's financial statements, which can impact its profitability, revenue, or expenses.
+45. Bloated balance sheet: Refers to a company's balance sheet that is overly leveraged, inefficient, or burdened with debt, which can impact its financial flexibility, credit rating, or ability to invest in growth opportunities.
+46. Debt high: Describes a company's high level of debt or leverage, which can impact its financial flexibility, credit rating, or ability to invest in growth opportunities.
+47. Reversal: Refers to a change in a company's financial performance, such as a decline in revenue or profitability, which can be due to various factors such as competition, market conditions, or internal issues.
+48. Debtors increasing or going up: Refers to an increase in a company's accounts receivable or debtors, which can impact its working capital, cash flow, or liquidity.
+49. Receivables increase: Describes an increase in a company's accounts receivable, which can impact its working capital, cash flow, or liquidity.
+50. Challenges in collections: Refers to difficulties a company faces in collecting its accounts receivable or debtors, which can impact its cash flow, liquidity, or financial performance.
+51. Slow down on disbursement: A reduction in the rate at which loans or funds are disbursed, often due to economic uncertainty, regulatory restrictions, or risk aversion.
+52. Write-offs: The process of removing a debt or asset from a company's balance sheet because it is deemed uncollectible or worthless. Write-offs can result in a loss for the company.
+53. Increase of provisioning: An increase in the amount of money set aside by a financial institution to cover potential losses on loans or assets, often due to a rise in credit risk or expected defaults.
+54. Delinquency increase: A rise in the number of borrowers who are late or behind on their loan payments, often indicating a deterioration in credit quality.
+55. GNPA increasing: An increase in Gross Non-Performing Assets (GNPA), which refers to the total value of loans that are overdue or in default, without considering provisions made for potential losses.
+56. Misappropriation of funds: The unauthorized or improper use of funds, often by an individual or organization, for personal gain or other unauthorized purposes.
+57. Increase in credit cost: A rise in the cost of borrowing or lending, often due to changes in interest rates, credit spreads, or other market conditions.
+58. Slippages: The reclassification of loans from a performing to a non-performing category, often due to a borrower's failure to meet repayment obligations.
+59. High credit deposit ratio: A situation where a bank's credit growth exceeds its deposit growth, potentially leading to liquidity risks or funding constraints.
+60. CAR decreasing: A decline in the Capital Adequacy Ratio (CAR), which measures a bank's capital as a percentage of its risk-weighted assets. A decreasing CAR indicates a reduction in a bank's capital buffer.
+61. Provision coverage falling: A decline in the provision coverage ratio, indicating that the provisions made for potential losses are decreasing relative to the growth in non-performing assets.
+62. Low Profitability: A state where a business, project, or investment generates revenue, but the net income or return on investment (ROI) is significantly lower than expected, industry average, or benchmark. This can be due to various factors such as high operating costs, intense competition, inefficient operations, or poor market conditions.
+63. Falling Net Interest Margin (NIM): A decrease in the difference between the interest income earned by a financial institution and the interest expense paid on deposits and other borrowings due to changes in interest or deposit rate, reduced profitability etc.
+64. Negative Capital Employed: Statements that indicate a company's liabilities exceed its assets, or its return on capital employed is negative, such as high debt levels, significant losses, or insufficient cash flow.
+65. Fall in networth: A decrease in net worth over a specific period.
+
+Now analyze the earnings call transcript and identify ALL red flags following the format above."""
+
+    def analyze_pdf(self, pdf_path: str) -> pd.DataFrame:
+        """Complete 4-iteration analysis pipeline for financial red flags"""
+        print(f"Starting complete 4-iteration analysis of: {pdf_path}")
         
-        # Load new queries
-        if new_queries_csv_path.endswith('.xlsx'):
-            new_queries_df = pd.read_excel(new_queries_csv_path)
-        else:
-            new_queries_df = pd.read_csv(new_queries_csv_path)
+        # Extract text from PDF
+        print("Extracting text from PDF...")
+        document_text = self.pdf_extractor.extract_text_from_pdf(pdf_path)
         
-        new_queries = new_queries_df["prompt"].tolist()
+        # ITERATION 1: Initial red flag identification
+        print("Running Iteration 1 - Initial Red Flag Analysis...")
+        iteration1_prompt = f"{self.analyst_prompt}\n\nDOCUMENT TO ANALYZE:\n{document_text}\n\nAnalysis:"
         
-        sys_prompt = f"""You must answer the question strictly based on the below given context.
+        start_time = time.time()
+        iteration1_response = self.llm._call(iteration1_prompt)
+        iteration1_time = time.time() - start_time
+        print(f"Iteration 1 completed in {iteration1_time:.2f} seconds")
+        
+        # ITERATION 2: Deduplication and cleanup
+        print("Running Iteration 2 - Deduplication and Cleanup...")
+        iteration2_prompt = f"""You must answer the question strictly based on the below given context.
 
 Context:
-{self.docs[0]["context"]}
+{document_text}
 
-"""
-        
-        results = []
-        
-        # Process each new query with corresponding previous response
-        for i, new_query in enumerate(new_queries):
-            start = time.perf_counter()
-            
-            try:
-                # Get the corresponding previous response (if available)
-                if i < len(self.previous_results):
-                    # Check if it's 3rd iteration (chained results) or 2nd iteration (original results)
-                    if 'chained_response' in self.previous_results.columns:
-                        previous_response = self.previous_results.iloc[i]['chained_response']
-                    else:
-                        previous_response = self.previous_results.iloc[i]['response']
-                    
-                    # Create chained prompt: new query + previous response
-                    chained_prompt = f"""Previous Analysis: {previous_response}
+Previous Analysis: {iteration1_response}
 
-Based on the above analysis and the original context, please answer: {new_query}
+Based on the above analysis and the original context, please answer: Remove the duplicates from the above context. Also if the Original Quote and Keyword identifies is same remove them. 
 
-Answer:"""
-                else:
-                    # If no previous response available, use regular prompt
-                    chained_prompt = f"""Question: {new_query}
-Answer:"""
-                
-                full_prompt = f"{sys_prompt}\n{chained_prompt}"
-                
-                # Get response from Perplexity
-                response_text = self.llm._call(full_prompt)
-                end = time.perf_counter()
-                
-                # Calculate token approximations
-                input_tokens = len(full_prompt.split())
-                completion_tokens = len(response_text.split()) if response_text else 0
-                
-                usage = {
-                    "iteration": iteration_number,
-                    "query_id": i + 1,
-                    "original_query": new_queries_df.iloc[i]["prompt"] if i < len(new_queries_df) else new_query,
-                    "previous_response": previous_response if i < len(self.previous_results) else "",
-                    "new_query": new_query,
-                    "chained_response": response_text,
-                    "completion_tokens": completion_tokens,
-                    "input_tokens": input_tokens,
-                    "response_time": f"{end - start:.2f}"
-                }
-                
-            except Exception as e:
-                end = time.perf_counter()
-                
-                usage = {
-                    "iteration": iteration_number,
-                    "query_id": i + 1,
-                    "original_query": new_queries_df.iloc[i]["prompt"] if i < len(new_queries_df) else new_query,
-                    "previous_response": previous_response if i < len(self.previous_results) else "",
-                    "new_query": new_query,
-                    "chained_response": f"Error: {str(e)}",
-                    "completion_tokens": None,
-                    "input_tokens": None,
-                    "response_time": f"{end - start:.2f}"
-                }
-            
-            results.append(usage)
-        
-        return pd.DataFrame(results)
-
-    def query_llama(self, maintain_conversation: bool = True, enable_chaining: bool = False) -> pd.DataFrame:
-        """Query the Perplexity API for a list of queries using the provided context"""
-        sys_prompt = f"""You are a financial analyst expert specializing in identifying red flags from earnings call transcripts and financial documents.
-
-COMPLETE DOCUMENT TO ANALYZE:
-{self.docs[0]["context"]}
-
-Your task is to analyze the ENTIRE document above and identify ALL potential red flags. 
-
-CRITICAL OUTPUT FORMAT REQUIREMENTS:
-- Number each red flag sequentially (1, 2, 3, etc.)
-- Start each entry with: "The potential red flag you observed - [brief description]"
-- Follow with "Original Quote:" and then the exact quote with speaker names
-- Include page references where available: (Page X)
-- Ensure comprehensive analysis of the entire document
-- Do not miss any sections or concerning statements
-
-EXAMPLE FORMAT:
-1. The potential red flag you observed - Debt reduction is lower than expected  
-Original Quote:  
-"Vikrant Kashyap: Have you -- are you able to reduce any debt in quarter one in Middle East and India?  
-Ramesh Kalyanaraman: So India, we are not reduced, but the cash balance has been increased to around INR75 crores, but we have not reduced any debt in Q1 in India and Middle East because Middle East we have not converted any showroom in Q1." (Page 9)  
-
-2. The potential red flag you observed - Margin pressure/Competition intensifying/Cost inflation  
-Original Quote:  
-"Pulkit Singhal: Thank you for the opportunity and congrats on the good set of performance. Just the first question is really on the margins, which seems to have been elusive. I mean looking at the company for the last two years, we seem to be executing quite well in terms of store expansions and revenue growth and clearly delivering higher than expected there. But margin expansion just has been completely elusive.  
-And I find it surprising your comment that while growing at 30% growth and 12% SSSG, I mean, which is quite healthy, you're still talking about high competitive intensity kind of quite contradictory that with such high growth rates, we have to invest so high. So can you talk about this a bit more? I mean we don't expect with lower revenue growth rates that you would not have to invest in the business. And it's only during a higher revenue growth that you expect margin expansion.  
-Ramesh Kalyanaraman: Yes. So you're right. We are -- meaning somewhere we have missed out on the operating leverage for advertisements that's why I told you that even Q1, it was a miss. And regarding competition, I will tell you where in new markets, where we assume that we will not spend too much because the brand is already aware and the location is the only thing which has to be communicated.  
-When you see the local players, regional players or the micro market players there becoming extremely active because of our showroom launch then we will have to increase the noise level there. Otherwise, we will lose our market share. And existing local players they increase their activity around our launch time. So that is where we also put more money so that we don't end up losing the market share or we don't end up taking out lesser from the competition." (Page 12-13
-
-3. The potential red flag you observed - Debt high/Increase in borrowing cost  
-Original Quote:  
-"Vikrant Kashyap: My question is how are you going to address this? Because if you continue to grow at a higher level, but bottom line is not expanding related to the top line, it will going to impact your overall performance? So, what are the steps you are taking to improve the bottom line in the businesses  
-Sanjay Raghuraman: Finance costs will be taken care because we told you when we convert stores, that money is going to reduce our debt. Okay. And again, FOCO, when you do FOCO showrooms, the margins will come down. And surely, that will have an impact on the gross margin. Okay. And interest, if you look at actually, the interest rates have been going up last year. So next year, that will be the base, right? So then again, we will not have this kind of issue is what we feel. So interest rates have been going up over the past year, one year, in that region.  
-And we are also beginning to repay loans now because of conversion. So all put together, interest part will be taken care but other area where FOCO showrooms will surely reduce our margin. We cannot have the own store margin. So that should be the way we should look at it." (Page 9)  
-.....
-
-Continue this exact format for ALL red flags identified throughout the document.
-
-"""
-        
-        prompt_template = """Question: {query}
-
-Analyze the complete document and provide ALL red flags in the exact numbered format specified above. Be thorough and comprehensive - cover the entire document.
-
-Answer:"""
-        
-        # Initialize conversation history
-        conversation_history = ""
-        results = []
-        previous_output = ""  # For prompt chaining
-        
-        for i, query in enumerate(self.queries, 1):
-            start = time.perf_counter()
-            
-            try:
-                # Handle prompt chaining
-                if enable_chaining and i > 1 and previous_output:
-                    # For chained prompts, append previous output to current query
-                    chained_query = f"{query}\n\nPrevious context: {previous_output}"
-                else:
-                    chained_query = query
-                
-                # Build the full prompt with conversation history
-                if maintain_conversation and conversation_history:
-                    full_prompt = f"{sys_prompt}\n{conversation_history}\n{prompt_template.format(query=chained_query)}"
-                else:
-                    full_prompt = f"{sys_prompt}\n{prompt_template.format(query=chained_query)}"
-                
-                # Get response from Perplexity
-                response_text = self.llm._call(full_prompt)
-                end = time.perf_counter()
-                
-                # Calculate token approximations (rough estimation)
-                input_tokens = len(full_prompt.split())
-                completion_tokens = len(response_text.split()) if response_text else 0
-                
-                usage = {
-                    "query_id": i,
-                    "query": query,
-                    "chained_query": chained_query if enable_chaining else query,
-                    "response": response_text,
-                    "completion_tokens": completion_tokens,
-                    "input_tokens": input_tokens,
-                    "response_time": f"{end - start:.2f}"
-                }
-                
-                # Update conversation history for next iteration
-                if maintain_conversation:
-                    conversation_history += f"\nQuestion: {chained_query}\nAnswer: {response_text}\n"
-                
-                # Store output for next chaining iteration
-                if enable_chaining:
-                    previous_output = response_text
-                
-            except Exception as e:
-                end = time.perf_counter()
-                
-                usage = {
-                    "query_id": i,
-                    "query": query,
-                    "chained_query": query,
-                    "response": f"Error: {str(e)}",
-                    "completion_tokens": None,
-                    "input_tokens": None,
-                    "response_time": f"{end - start:.2f}"
-                }
-                
-                # Reset previous output on error
-                if enable_chaining:
-                    previous_output = ""
-            
-            results.append(usage)
-        
-        return pd.DataFrame(results)
-    
-    def save_results(self, results_df: pd.DataFrame, output_path: str = None):
-        """Save results to CSV file"""
-        if output_path is None:
-            # Generate filename based on PDF name and timestamp
-            pdf_name = os.path.splitext(os.path.basename(self.pdf_path))[0]
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            output_path = f"perplexity_query_results_{pdf_name}_{timestamp}.csv"
-        
-        results_df.to_csv(output_path, index=False)
-        return output_path
-
-def run_four_iteration_pipeline():
-    """
-    Complete 4-iteration pipeline for financial red flag analysis using Perplexity:
-    1. Initial red flag identification
-    2. Deduplication and cleanup
-    3. Categorization of red flags
-    4. Detailed summary generation
-    """
-    
-    # Configuration
-    pdf_path = r"Kalyan June 24.pdf"
-    queries_csv_path = r"EWS_prompts_v2.xlsx"
-    
-    print("Starting complete 4-iteration pipeline with Perplexity...")
-    
-    # ITERATION 1: Initial red flag identification
-    print("Running 1st iteration - Initial Analysis...")
-    pipeline_1st = LlamaQueryPipeline(
-        pdf_path=pdf_path,
-        queries_csv_path=queries_csv_path,
-        llm_endpoint="https://as1-lower-llm.crisil.local/perplexity/llama/70b/llm/",
-        max_pages=50  # Limit pages to manage token count
-    )
-    
-    # Run 1st iteration
-    first_results_df = pipeline_1st.query_llama(maintain_conversation=True, enable_chaining=False)
-    
-    first_output_file = pipeline_1st.save_results(first_results_df, "perplexity_query_results_iteration1.csv")
-    print(f"1st iteration completed. Results saved to: {first_output_file}")
-    
-    # Get first response for chaining
-    first_response = first_results_df.iloc[0]['response']
-    
-    # ITERATION 2: Deduplication and cleanup
-    print("Running 2nd iteration - Deduplication...")
-    second_prompt = """Remove the duplicates from the above context. Also if the Original Quote and Keyword identifies is same remove them. 
-    
 Ensure that:
 1. No duplicate red flags are present
 2. Similar or redundant information is consolidated
 3. All unique red flags are retained
-4. The output maintains the structure and clarity of the original analysis"""
-    
-    second_full_prompt = f"""You must answer the question strictly based on the below given context.
-
-Context:
-{pipeline_1st.docs[0]["context"]}
-
-Previous Analysis: {first_response}
-
-Based on the above analysis and the original context, please answer: {second_prompt}
+4. The output maintains the structure and clarity of the original analysis
+5. Keep the same format: number, red flag keyword, and original quote with page numbers
 
 Answer:"""
-    
-    second_response = pipeline_1st.llm._call(second_full_prompt)
-    
-    # ITERATION 3: Categorization of red flags
-    print("Running 3rd iteration - Categorization...")
-    # UPDATED: Clear prompt that references the deduplicated red flags from iteration 2
-    third_prompt = """Based on the deduplicated red flags identified in the previous analysis, I need help categorizing these red flags into the following 8 categories:
+        
+        start_time = time.time()
+        iteration2_response = self.llm._call(iteration2_prompt)
+        iteration2_time = time.time() - start_time
+        print(f"Iteration 2 completed in {iteration2_time:.2f} seconds")
+        
+        # ITERATION 3: Categorization of red flags
+        print("Running Iteration 3 - Categorization...")
+        iteration3_prompt = f"""You must answer the question strictly based on the below given context.
+
+Context:
+{document_text}
+
+Previous Analysis: {iteration2_response}
+
+Based on the above analysis and the original context, please answer: Based on the deduplicated red flags identified in the previous analysis, I need help categorizing these red flags into the following 8 categories:
 
 1. Balance Sheet Issues: Red flags related to the company's assets, liabilities, equity, and overall financial position.
 2. P&L (Income Statement) Issues: Red flags related to the company's revenues, expenses, profits, and overall financial performance.
@@ -471,25 +253,25 @@ Answer:"""
 - [Red flag 1 from previous analysis]
 - [Red flag 2 from previous analysis]
 
-Continue this format for all 8 categories, ensuring every red flag from the previous analysis is categorized."""
-    
-    third_full_prompt = f"""You must answer the question strictly based on the below given context.
-
-Context:
-{pipeline_1st.docs[0]["context"]}
-
-Previous Analysis: {second_response}
-
-Based on the above analysis and the original context, please answer: {third_prompt}
+Continue this format for all 8 categories, ensuring every red flag from the previous analysis is categorized.
 
 Answer:"""
-    
-    third_response = pipeline_1st.llm._call(third_full_prompt)
-    
-    # ITERATION 4: Detailed summary generation
-    print("Running 4th iteration - Summary Generation...")
-    # NEW: Fourth prompt for detailed summarization
-    fourth_prompt = """Based on the categorized red flags from the previous analysis, provide a comprehensive and detailed summary of each category of red flags. Follow these guidelines:
+        
+        start_time = time.time()
+        iteration3_response = self.llm._call(iteration3_prompt)
+        iteration3_time = time.time() - start_time
+        print(f"Iteration 3 completed in {iteration3_time:.2f} seconds")
+        
+        # ITERATION 4: Detailed summary generation
+        print("Running Iteration 4 - Summary Generation...")
+        iteration4_prompt = f"""You must answer the question strictly based on the below given context.
+
+Context:
+{document_text}
+
+Previous Analysis: {iteration3_response}
+
+Based on the above analysis and the original context, please answer: Based on the categorized red flags from the previous analysis, provide a comprehensive and detailed summary of each category of red flags. Follow these guidelines:
 
 1. **Retain all information**: Ensure that no details are omitted or lost during the summarization process
 2. **Maintain a neutral tone**: Present the summary in a factual and objective manner, avoiding any emotional or biased language
@@ -507,824 +289,225 @@ Format the output exactly like this example:
 ### 2. P&L (Income Statement) Issues  
 [Detailed paragraph summary of all P&L related red flags with specific data points and factual information]
 
-Continue this format for all 8 categories. Each summary should be a comprehensive paragraph that captures all the relevant red flags and their details within that category."""
-    
-    fourth_full_prompt = f"""You must answer the question strictly based on the below given context.
-
-Context:
-{pipeline_1st.docs[0]["context"]}
-
-Previous Analysis: {third_response}
-
-Based on the above analysis and the original context, please answer: {fourth_prompt}
+Continue this format for all 8 categories. Each summary should be a comprehensive paragraph that captures all the relevant red flags and their details within that category.
 
 Answer:"""
-    
-    fourth_response = pipeline_1st.llm._call(fourth_full_prompt)
-    
-    # Save all results together
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    all_results = pd.DataFrame({
-        "iteration": [1, 2, 3, 4],
-        "stage": [
-            "Initial Analysis",
-            "Deduplication", 
-            "Categorization",
-            "Summary Generation"
-        ],
-        "prompt": [
-            first_results_df.iloc[0]['query'],  # Original query from 1st iteration
-            second_prompt,
-            third_prompt,
-            fourth_prompt
-        ],
-        "response": [
-            first_response,
-            second_response,
-            third_response,
-            fourth_response
-        ],
-        "timestamp": [timestamp, timestamp, timestamp, timestamp]
-    })
-    
-    # Save complete results
-    complete_output_file = f"complete_perplexity_pipeline_results_{timestamp}.csv"
-    all_results.to_csv(complete_output_file, index=False)
-    
-    print(f"Complete 4-iteration pipeline with Perplexity finished!")
-    print(f"1st iteration: {first_output_file}")
-    print(f"Complete results: {complete_output_file}")
-    print(f"Final categorized summary is in row 4 of {complete_output_file}")
-    
-    return all_results
-
-def main():
-    """Example usage of the pipeline with Perplexity"""
-    # Configuration
-    pdf_path = r"C:\Users\DeshmukhK\Downloads\EWS\Earning call transcripts\Sterling Q2 FY23.pdf"
-    queries_csv_path = r"C:\Users\DeshmukhK\Downloads\EWS_LLAMA_prompts.xlsx"
-    
-    # For first iteration (if not already done)
-    pipeline = LlamaQueryPipeline(
-        pdf_path=pdf_path,
-        queries_csv_path=queries_csv_path,
-        llm_endpoint="https://as1-lower-llm.crisil.local/perplexity/llama/70b/llm/"
-    )
-    
-    # Uncomment below for first iteration
-    # results_df = pipeline.query_llama(maintain_conversation=True, enable_chaining=False)
-    # output_file = pipeline.save_results(results_df)
-    
-    return None
-
-def main_chained():
-    """Example usage for chained queries using previous results with Perplexity"""
-    # Configuration - Updated for relative paths
-    pdf_path = r"Kalyan June 24.pdf"
-    previous_results_path = r"perplexity_query_results.csv"  # Your existing results file
-    new_queries_csv_path = r"EWS_prompts_v2_iteration2.xlsx"  # New prompts for chaining
-    
-    # Initialize pipeline with previous results
-    pipeline = LlamaQueryPipeline(
-        pdf_path=pdf_path,
-        queries_csv_path=None,  # Not needed for chaining
-        previous_results_path=previous_results_path,
-        llm_endpoint="https://as1-lower-llm.crisil.local/perplexity/llama/70b/llm/"
-    )
-    
-    # Run chained queries (2nd iteration)
-    chained_results_df = pipeline.query_llama_with_chaining(new_queries_csv_path, iteration_number=2)
-    
-    # Save chained results
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    chained_output_file = f"perplexity_chained_results_iteration2_{timestamp}.csv"
-    chained_results_df.to_csv(chained_output_file, index=False)
-    
-    return chained_results_df
-
-
-if __name__ == "__main__":
-    # Run the improved 4-iteration pipeline with Perplexity
-    all_results = run_four_iteration_pipeline()
-import ast
-from typing import Dict, List, Any
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from langchain.llms.base import LLM
-from langchain.callbacks.manager import CallbackManagerForLLMRun
-
-# Suppress SSL warnings
-warnings.filterwarnings('ignore')
-
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Check if openpyxl is available for Excel support
-try:
-    import openpyxl
-    EXCEL_SUPPORT = True
-except ImportError:
-    EXCEL_SUPPORT = False
-    print("Warning: openpyxl not installed. Excel files will be saved as CSV. Install with: pip install openpyxl")
-
-def getFilehash(file_path: str):
-    """Generate SHA3-256 hash of a file"""
-    with open(file_path, 'rb') as f:
-        return hashlib.sha3_256(f.read()).hexdigest()
-
-def clean_response(text: str) -> str:
-    """Clean the response text by removing unwanted patterns"""
-    # Remove any prompt repetition or unwanted prefixes
-    # Add your specific cleaning logic here
-    return text
-
-class HostedLLM_Perplexity(LLM):
-    """Custom LLM class for hosted Perplexity model"""
-    
-    def __init__(self, endpoint: str, **kwargs):
-        super().__init__(**kwargs)
-        self._endpoint = endpoint
-    
-    def _llm_type(self) -> str:
-        return "Hosted LLM"
-    
-    def _call(self, prompt: str, stop=None, run_manager: CallbackManagerForLLMRun=None) -> str:
-        """Make API call to hosted Perplexity LLM with token limit handling"""
-        try:
-            # Check token count (rough estimation: 1 token ≈ 4 characters)
-            estimated_tokens = len(prompt) // 4
-            max_input_tokens = 14000  # Leave buffer for response tokens (16384 - 2384)
-            
-            if estimated_tokens > max_input_tokens:
-                print(f"Warning: Prompt too long ({estimated_tokens} tokens). Truncating...")
-                # Truncate prompt to fit within limits
-                max_chars = max_input_tokens * 4
-                prompt = prompt[:max_chars] + "\n\n[Note: Content truncated due to length limits]"
-                print(f"Truncated to approximately {len(prompt) // 4} tokens")
-            
-            data = {
-                "inputs": prompt,
-                "parameters": {
-                    "temperature": 0.1,
-                    "max_new_tokens": 2000  # Limit response length
-                }
-            }
-            
-            response = requests.post(self._endpoint, json=data, verify=False, timeout=60)
-            
-            print(f"Response Status: {response.status_code}")
-            print(f"Response Text: {response.text[:500]}...")  # First 500 chars
-            
-            if response.status_code != 200:
-                return f"LLM Call Failed: HTTP {response.status_code} - {response.text}"
-            
-            response_v = ast.literal_eval(response.text)
-            print(response_v)
-            text = response_v[0]["generated_text"]
-            output = clean_response(text)
-            return output.strip()
-            
-        except requests.exceptions.RequestException as e:
-            return f"LLM Call Failed - Network Error: {e}"
-        except json.JSONDecodeError as e:
-            return f"LLM Call Failed - JSON Error: {e}"
-        except KeyError as e:
-            return f"LLM Call Failed - Missing Key: {e}"
-        except Exception as e:
-            return f"LLM Call Failed - General Error: {e}"
-
-class PDFExtractor:
-    """Class for extracting text from PDF files"""
-    
-    def extract_text_from_pdf(self, pdf_path: str) -> List[Dict[str, Any]]:
-        """Extract text from each page of a PDF file"""
+        
         start_time = time.time()
-        try:
-            doc = fitz.open(pdf_path)
-            pages = []
-            
-            for page_num, page in enumerate(doc):
-                text = page.get_text()
-                pages.append({
-                    "page_num": page_num + 1,
-                    "text": text
-                })
-            
-            # Explicitly close the document to free memory
-            doc.close()
-            logger.info(f"PDF text extraction took {time.time() - start_time:.2f} seconds")
-            return pages
-            
-        except Exception as e:
-            logger.error(f"PDF extraction error: {e}")
-            raise
-
-def mergeDocs(pdf_path: str, split_pages: bool = False, max_pages: int = None) -> List[Dict[str, Any]]:
-    """Merge PDF documents into a single context with optional page limiting"""
-    extractor = PDFExtractor()
-    pages = extractor.extract_text_from_pdf(pdf_path)
+        iteration4_response = self.llm._call(iteration4_prompt)
+        iteration4_time = time.time() - start_time
+        print(f"Iteration 4 completed in {iteration4_time:.2f} seconds")
+        
+        # Create comprehensive results DataFrame
+        total_time = iteration1_time + iteration2_time + iteration3_time + iteration4_time
+        pdf_name = os.path.splitext(os.path.basename(pdf_path))[0]
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Parse initial red flags for count
+        red_flags = self._parse_response(iteration1_response)
+        
+        results_data = {
+            'iteration': [1, 2, 3, 4],
+            'stage': [
+                'Initial Red Flag Analysis',
+                'Deduplication and Cleanup', 
+                'Categorization',
+                'Summary Generation'
+            ],
+            'response': [
+                iteration1_response,
+                iteration2_response,
+                iteration3_response,
+                iteration4_response
+            ],
+            'processing_time_seconds': [
+                round(iteration1_time, 2),
+                round(iteration2_time, 2), 
+                round(iteration3_time, 2),
+                round(iteration4_time, 2)
+            ],
+            'document_name': [pdf_name] * 4,
+            'analysis_timestamp': [timestamp] * 4
+        }
+        
+        results_df = pd.DataFrame(results_data)
+        
+        print(f"Complete 4-iteration analysis completed!")
+        print(f"- Total processing time: {total_time:.2f} seconds")
+        print(f"- Initial red flags found: {len(red_flags)}")
+        print(f"- Final categorized summary available in iteration 4")
+        
+        return results_df
     
-    # Limit pages if specified to control document size
-    if max_pages and len(pages) > max_pages:
-        print(f"Warning: PDF has {len(pages)} pages. Limiting to first {max_pages} pages to manage token limits.")
-        pages = pages[:max_pages]
-    
-    if split_pages:
-        return [{"context": page["text"], "page_num": page["page_num"]} for page in pages]
-    else:
-        # Merge all pages into single context
-        all_text = "\n".join([page["text"] for page in pages])
+    def _parse_response(self, response: str) -> list:
+        """Parse LLM response into structured red flags"""
+        red_flags = []
         
-        # Check if text is too long (rough estimate)
-        estimated_tokens = len(all_text) // 4
-        if estimated_tokens > 10000:  # Leave room for system prompt
-            print(f"Warning: Document very long ({estimated_tokens} tokens). Consider splitting into chunks.")
-            # Optionally truncate here if needed
-            max_chars = 10000 * 4
-            all_text = all_text[:max_chars] + "\n\n[Note: Document truncated due to length]"
+        # Split response into sections
+        sections = response.split('\n\n')
+        current_flag = {}
         
-        return [{"context": all_text}]
-
-class LlamaQueryPipeline:
-    """Main pipeline class for querying PDF content with Perplexity"""
-    
-    def __init__(self, pdf_path: str, queries_csv_path: str = None, llm_endpoint: str = "https://as1-lower-llm.crisil.local/perplexity/llama/70b/llm/", previous_results_path: str = None, max_pages: int = None):
-        """Initialize the pipeline with Perplexity LLM"""
-        self.llm = HostedLLM_Perplexity(endpoint=llm_endpoint)
-        self.docs = mergeDocs(pdf_path, split_pages=False, max_pages=max_pages)
-        
-        # Load queries from Excel or CSV (only if provided)
-        if queries_csv_path:
-            if queries_csv_path.endswith('.xlsx'):
-                queries_df = pd.read_excel(queries_csv_path)
-            else:
-                queries_df = pd.read_csv(queries_csv_path)
-            self.queries = queries_df["prompt"].tolist()
-        else:
-            self.queries = []
-            
-        self.pdf_path = pdf_path
-        
-        # Load previous results if provided
-        self.previous_results = None
-        if previous_results_path and os.path.exists(previous_results_path):
-            if previous_results_path.endswith('.xlsx'):
-                self.previous_results = pd.read_excel(previous_results_path)
-            else:
-                self.previous_results = pd.read_csv(previous_results_path)
-
-    def query_llama_with_chaining(self, new_queries_csv_path: str, iteration_number: int = 2) -> pd.DataFrame:
-        """Query the Perplexity API using previous results for chaining"""
-        if self.previous_results is None:
-            raise ValueError("No previous results loaded. Please provide previous_results_path in __init__")
-        
-        # Load new queries
-        if new_queries_csv_path.endswith('.xlsx'):
-            new_queries_df = pd.read_excel(new_queries_csv_path)
-        else:
-            new_queries_df = pd.read_csv(new_queries_csv_path)
-        
-        new_queries = new_queries_df["prompt"].tolist()
-        
-        sys_prompt = f"""You must answer the question strictly based on the below given context.
-
-Context:
-{self.docs[0]["context"]}
-
-"""
-        
-        results = []
-        
-        # Process each new query with corresponding previous response
-        for i, new_query in enumerate(new_queries):
-            start = time.perf_counter()
-            
-            try:
-                # Get the corresponding previous response (if available)
-                if i < len(self.previous_results):
-                    # Check if it's 3rd iteration (chained results) or 2nd iteration (original results)
-                    if 'chained_response' in self.previous_results.columns:
-                        previous_response = self.previous_results.iloc[i]['chained_response']
-                    else:
-                        previous_response = self.previous_results.iloc[i]['response']
-                    
-                    # Create chained prompt: new query + previous response
-                    chained_prompt = f"""Previous Analysis: {previous_response}
-
-Based on the above analysis and the original context, please answer: {new_query}
-
-Answer:"""
-                else:
-                    # If no previous response available, use regular prompt
-                    chained_prompt = f"""Question: {new_query}
-Answer:"""
+        for section in sections:
+            section = section.strip()
+            if not section:
+                continue
                 
-                full_prompt = f"{sys_prompt}\n{chained_prompt}"
+            # Check if this is a new red flag (starts with number)
+            if section[0].isdigit() and '. The potential red flag you observed' in section:
+                # Save previous flag if exists
+                if current_flag:
+                    red_flags.append(current_flag)
                 
-                # Get response from Perplexity
-                response_text = self.llm._call(full_prompt)
-                end = time.perf_counter()
-                
-                # Calculate token approximations
-                input_tokens = len(full_prompt.split())
-                completion_tokens = len(response_text.split()) if response_text else 0
-                
-                usage = {
-                    "iteration": iteration_number,
-                    "query_id": i + 1,
-                    "original_query": new_queries_df.iloc[i]["prompt"] if i < len(new_queries_df) else new_query,
-                    "previous_response": previous_response if i < len(self.previous_results) else "",
-                    "new_query": new_query,
-                    "chained_response": response_text,
-                    "completion_tokens": completion_tokens,
-                    "input_tokens": input_tokens,
-                    "response_time": f"{end - start:.2f}"
-                }
-                
-            except Exception as e:
-                end = time.perf_counter()
-                
-                usage = {
-                    "iteration": iteration_number,
-                    "query_id": i + 1,
-                    "original_query": new_queries_df.iloc[i]["prompt"] if i < len(new_queries_df) else new_query,
-                    "previous_response": previous_response if i < len(self.previous_results) else "",
-                    "new_query": new_query,
-                    "chained_response": f"Error: {str(e)}",
-                    "completion_tokens": None,
-                    "input_tokens": None,
-                    "response_time": f"{end - start:.2f}"
+                # Start new flag
+                current_flag = {
+                    'red_flag_number': len(red_flags) + 1,
+                    'red_flag_keyword': section.split(' - ')[-1] if ' - ' in section else 'Not specified',
+                    'original_quote': '',
+                    'page_number': 'Not specified'
                 }
             
-            results.append(usage)
+            elif 'Original Quote:' in section:
+                # Extract quote and page number
+                quote_text = section.replace('Original Quote:', '').strip()
+                
+                # Try to extract page number
+                if 'Page' in quote_text:
+                    import re
+                    page_match = re.search(r'\(Page (\d+)\)', quote_text)
+                    if page_match:
+                        current_flag['page_number'] = page_match.group(1)
+                        quote_text = quote_text.replace(page_match.group(0), '').strip()
+                
+                current_flag['original_quote'] = quote_text
         
-        return pd.DataFrame(results)
-
-    def query_llama(self, maintain_conversation: bool = True, enable_chaining: bool = False) -> pd.DataFrame:
-        """Query the Perplexity API for a list of queries using the provided context"""
-        sys_prompt = f"""You are a financial analyst expert specializing in identifying red flags from earnings call transcripts and financial documents.
-
-COMPLETE DOCUMENT TO ANALYZE:
-{self.docs[0]["context"]}
-
-Your task is to analyze the ENTIRE document above and identify ALL potential red flags with their complete conversational context.
-
-CRITICAL OUTPUT FORMAT REQUIREMENTS:
-- Number each red flag sequentially (1, 2, 3, etc.)
-- Start each entry with: "The potential red flag you observed - [brief description]"
-- Follow with "Complete Conversation Context:" and include:
-  * The question/topic that led to the concerning response
-  * The full response from management
-  * Any follow-up questions and responses related to this red flag
-  * Speaker names and their roles (if mentioned)
-- Include page references where available: (Page X)
-- Provide broader context (2-3 exchanges before and after if relevant)
-- Ensure comprehensive analysis of the entire document
-- Capture the flow of conversation to understand the full context
-
-ENHANCED EXAMPLE FORMAT:
-1. The potential red flag you observed - Debt reduction lower than expected with evasive management response
-Complete Conversation Context:
-"Analyst: Given the strong cash flow this quarter, what are your plans for debt reduction? Are you on track to meet your deleveraging targets?
-
-Vikrant Kashyap: Have you -- are you able to reduce any debt in quarter one?
-
-Ramesh Kalyanaraman: So India, we are not reduced, but the cash balance has been increased. We have maintained our debt levels but improved our liquidity position. The focus has been on operational efficiency rather than debt reduction at this time.
-
-Follow-up Analyst: Can you provide more specifics on the debt reduction timeline?
-
-Ramesh Kalyanaraman: We will evaluate this on a quarter-by-quarter basis depending on market conditions and investment opportunities." (Page 9)
-
-2. The potential red flag you observed - Margin pressure with vague explanations
-Complete Conversation Context:
-"[Include full conversational flow around margin discussions]" (Page X)
-
-Continue this exact format for ALL red flags identified throughout the document. Ensure you capture the complete conversational context, not just isolated quotes.
-
-"""
+        # Add the last flag
+        if current_flag:
+            red_flags.append(current_flag)
         
-        prompt_template = """Question: {query}
-
-Analyze the complete document and provide ALL red flags with their complete conversational context in the exact numbered format specified above. Be thorough and comprehensive - cover the entire document and include full conversation flows around each red flag.
-
-Answer:"""
-        
-        # Initialize conversation history
-        conversation_history = ""
-        results = []
-        previous_output = ""  # For prompt chaining
-        
-        for i, query in enumerate(self.queries, 1):
-            start = time.perf_counter()
-            
-            try:
-                # Handle prompt chaining
-                if enable_chaining and i > 1 and previous_output:
-                    # For chained prompts, append previous output to current query
-                    chained_query = f"{query}\n\nPrevious context: {previous_output}"
-                else:
-                    chained_query = query
-                
-                # Build the full prompt with conversation history
-                if maintain_conversation and conversation_history:
-                    full_prompt = f"{sys_prompt}\n{conversation_history}\n{prompt_template.format(query=chained_query)}"
-                else:
-                    full_prompt = f"{sys_prompt}\n{prompt_template.format(query=chained_query)}"
-                
-                # Get response from Perplexity
-                response_text = self.llm._call(full_prompt)
-                end = time.perf_counter()
-                
-                # Calculate token approximations (rough estimation)
-                input_tokens = len(full_prompt.split())
-                completion_tokens = len(response_text.split()) if response_text else 0
-                
-                usage = {
-                    "query_id": i,
-                    "query": query,
-                    "chained_query": chained_query if enable_chaining else query,
-                    "response": response_text,
-                    "completion_tokens": completion_tokens,
-                    "input_tokens": input_tokens,
-                    "response_time": f"{end - start:.2f}"
-                }
-                
-                # Update conversation history for next iteration
-                if maintain_conversation:
-                    conversation_history += f"\nQuestion: {chained_query}\nAnswer: {response_text}\n"
-                
-                # Store output for next chaining iteration
-                if enable_chaining:
-                    previous_output = response_text
-                
-            except Exception as e:
-                end = time.perf_counter()
-                
-                usage = {
-                    "query_id": i,
-                    "query": query,
-                    "chained_query": query,
-                    "response": f"Error: {str(e)}",
-                    "completion_tokens": None,
-                    "input_tokens": None,
-                    "response_time": f"{end - start:.2f}"
-                }
-                
-                # Reset previous output on error
-                if enable_chaining:
-                    previous_output = ""
-            
-            results.append(usage)
-        
-        return pd.DataFrame(results)
+        return red_flags
     
-    def save_results(self, results_df: pd.DataFrame, output_path: str = None, save_format: str = "excel"):
-        """Save results to Excel or CSV file"""
+    def save_to_excel(self, results_df: pd.DataFrame, output_path: str = None) -> str:
+        """Save complete 4-iteration results to Excel file with multiple sheets"""
         if output_path is None:
-            # Generate filename based on PDF name and timestamp
-            pdf_name = os.path.splitext(os.path.basename(self.pdf_path))[0]
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            if save_format.lower() == "excel" and EXCEL_SUPPORT:
-                output_path = f"perplexity_query_results_{pdf_name}_{timestamp}.xlsx"
-            else:
-                output_path = f"perplexity_query_results_{pdf_name}_{timestamp}.csv"
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            output_path = f"financial_red_flags_complete_analysis_{timestamp}.xlsx"
         
-        try:
-            if (output_path.endswith('.xlsx') or save_format.lower() == "excel") and EXCEL_SUPPORT:
-                # Create ExcelWriter with options to handle long text
-                with pd.ExcelWriter(output_path, engine='openpyxl', options={'strings_to_urls': False}) as writer:
-                    results_df.to_excel(writer, sheet_name='Results', index=False)
-                    
-                    # Get the workbook and worksheet
-                    workbook = writer.book
-                    worksheet = writer.sheets['Results']
-                    
-                    # Adjust column widths and text wrapping
-                    for column in worksheet.columns:
-                        max_length = 0
-                        column_letter = column[0].column_letter
-                        
-                        for cell in column:
-                            try:
-                                if len(str(cell.value)) > max_length:
-                                    max_length = len(str(cell.value))
-                            except:
-                                pass
-                        
-                        # Set column width (max 100 for readability)
-                        adjusted_width = min(max_length + 2, 100)
-                        worksheet.column_dimensions[column_letter].width = adjusted_width
-                        
-                        # Enable text wrapping for all cells in this column
-                        for cell in column:
-                            cell.alignment = cell.alignment.copy(wrap_text=True)
-                            
-                print(f"Results saved to Excel: {output_path}")
-            else:
-                results_df.to_csv(output_path, index=False, encoding='utf-8')
-                print(f"Results saved to CSV: {output_path}")
-                
-        except Exception as e:
-            print(f"Error saving to {save_format}: {e}")
-            # Fallback to CSV if Excel fails
-            fallback_path = output_path.replace('.xlsx', '.csv')
-            results_df.to_csv(fallback_path, index=False, encoding='utf-8')
-            print(f"Fallback: Results saved to CSV: {fallback_path}")
-            return fallback_path
+        # Create Excel writer with formatting
+        with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
+            # Write main results - all 4 iterations
+            results_df.to_excel(writer, sheet_name='Complete Analysis', index=False)
             
+            # Create individual sheets for each iteration
+            for idx, row in results_df.iterrows():
+                sheet_name = f"Iteration {row['iteration']} - {row['stage'][:15]}"
+                
+                # Create a detailed sheet for this iteration
+                iteration_data = {
+                    'Stage': [row['stage']],
+                    'Processing Time (seconds)': [row['processing_time_seconds']],
+                    'Document Name': [row['document_name']],
+                    'Analysis Timestamp': [row['analysis_timestamp']],
+                    'Full Response': [row['response']]
+                }
+                iteration_df = pd.DataFrame(iteration_data)
+                iteration_df.to_excel(writer, sheet_name=sheet_name, index=False)
+            
+            # Create a summary sheet for iteration 1 (parsed red flags)
+            if len(results_df) > 0:
+                iteration1_response = results_df.iloc[0]['response']
+                red_flags = self._parse_response(iteration1_response)
+                
+                if red_flags:
+                    red_flags_df = pd.DataFrame(red_flags)
+                    red_flags_df.to_excel(writer, sheet_name='Parsed Red Flags (Iter 1)', index=False)
+            
+            # Get workbook for formatting
+            workbook = writer.book
+            
+            # Format all worksheets
+            for sheet_name in writer.sheets:
+                worksheet = writer.sheets[sheet_name]
+                
+                # Add formatting
+                header_format = workbook.add_format({
+                    'bold': True,
+                    'text_wrap': True,
+                    'valign': 'top',
+                    'fg_color': '#D7E4BC',
+                    'border': 1
+                })
+                
+                cell_format = workbook.add_format({
+                    'text_wrap': True,
+                    'valign': 'top',
+                    'border': 1
+                })
+                
+                # Auto-adjust column widths based on sheet
+                if sheet_name == 'Complete Analysis':
+                    worksheet.set_column('A:A', 12)  # iteration
+                    worksheet.set_column('B:B', 25)  # stage
+                    worksheet.set_column('C:C', 100) # response
+                    worksheet.set_column('D:D', 20)  # processing_time
+                    worksheet.set_column('E:E', 25)  # document_name
+                    worksheet.set_column('F:F', 20)  # timestamp
+                elif sheet_name == 'Parsed Red Flags (Iter 1)':
+                    worksheet.set_column('A:A', 15)  # red_flag_number
+                    worksheet.set_column('B:B', 30)  # red_flag_keyword  
+                    worksheet.set_column('C:C', 80)  # original_quote
+                    worksheet.set_column('D:D', 15)  # page_number
+                else:
+                    # Individual iteration sheets
+                    worksheet.set_column('A:A', 25)  # Stage
+                    worksheet.set_column('B:B', 20)  # Processing Time
+                    worksheet.set_column('C:C', 25)  # Document Name
+                    worksheet.set_column('D:D', 20)  # Timestamp
+                    worksheet.set_column('E:E', 120) # Full Response
+        
+        print(f"Complete analysis results saved to: {output_path}")
+        print(f"Excel file contains:")
+        print(f"- Complete Analysis: All 4 iterations overview")
+        print(f"- Iteration 1-4: Individual detailed sheets")
+        print(f"- Parsed Red Flags: Structured red flags from iteration 1")
+        
         return output_path
 
-def run_four_iteration_pipeline():
-    """
-    Complete 4-iteration pipeline for financial red flag analysis using Perplexity:
-    1. Initial red flag identification with conversational context
-    2. Deduplication and cleanup
-    3. Categorization of red flags
-    4. Detailed summary generation
-    """
-    
-    # Configuration
-    pdf_path = r"Kalyan June 24.pdf"
-    queries_csv_path = r"EWS_prompts_v2.xlsx"
-    
-    print("Starting complete 4-iteration pipeline with Perplexity...")
-    
-    # ITERATION 1: Initial red flag identification with conversational context
-    print("Running 1st iteration - Initial Analysis with Conversational Context...")
-    pipeline_1st = LlamaQueryPipeline(
-        pdf_path=pdf_path,
-        queries_csv_path=queries_csv_path,
-        llm_endpoint="https://as1-lower-llm.crisil.local/perplexity/llama/70b/llm/",
-        max_pages=50  # Limit pages to manage token count - adjust as needed
-    )
-    
-    # Run 1st iteration
-    first_results_df = pipeline_1st.query_llama(maintain_conversation=True, enable_chaining=False)
-    
-    first_output_file = pipeline_1st.save_results(first_results_df, "perplexity_query_results_iteration1.xlsx", "excel")
-    print(f"1st iteration completed. Results saved to: {first_output_file}")
-    
-    # Get first response for chaining
-    first_response = first_results_df.iloc[0]['response']
-    
-    # ITERATION 2: Deduplication and cleanup
-    print("Running 2nd iteration - Deduplication...")
-    second_prompt = """Remove the duplicates from the above context. Also if the Complete Conversation Context and red flag description are the same, remove them. 
-    
-Ensure that:
-1. No duplicate red flags are present
-2. Similar or redundant conversational contexts are consolidated
-3. All unique red flags with their complete conversational context are retained
-4. The output maintains the structure, clarity, and conversational flow of the original analysis
-5. Preserve the complete conversational context for each unique red flag"""
-    
-    second_full_prompt = f"""You must answer the question strictly based on the below given context.
-
-Context:
-{pipeline_1st.docs[0]["context"]}
-
-Previous Analysis: {first_response}
-
-Based on the above analysis and the original context, please answer: {second_prompt}
-
-Answer:"""
-    
-    second_response = pipeline_1st.llm._call(second_full_prompt)
-    
-    # ITERATION 3: Categorization of red flags
-    print("Running 3rd iteration - Categorization...")
-    third_prompt = """Based on the deduplicated red flags with their complete conversational context identified in the previous analysis, I need help categorizing these red flags into the following 8 categories:
-
-1. Balance Sheet Issues: Red flags related to the company's assets, liabilities, equity, and overall financial position.
-2. P&L (Income Statement) Issues: Red flags related to the company's revenues, expenses, profits, and overall financial performance.
-3. Management Issues: Red flags related to the company's leadership, governance, and decision-making processes.
-4. Regulatory Issues: Red flags related to the company's compliance with laws, regulations, and industry standards.
-5. Industry and Market Issues: Red flags related to the company's position within its industry, market trends, and competitive landscape.
-6. Operational Issues: Red flags related to the company's internal processes, systems, and infrastructure.
-7. Financial Reporting and Transparency Issues: Red flags related to the company's financial reporting, disclosure, and transparency practices.
-8. Strategic Issues: Red flags related to the company's overall strategy, vision, and direction.
-
-**Task**: Take each red flag WITH ITS COMPLETE CONVERSATIONAL CONTEXT from the deduplicated list in the previous analysis and assign it to the most appropriate category above.
-
-**Rules for categorization**:
-- If a red flag could fit into multiple categories, assign it to the one that seems most closely related
-- Do not leave any flag unclassified
-- Do not assign any flag to multiple categories
-- Ensure clear classification that groups similar issues together
-- MAINTAIN the complete conversational context for each red flag in the categorization
-
-**Output Format**:
-### 1. Balance Sheet Issues
-- [Red flag 1 with complete conversational context from previous analysis]
-- [Red flag 2 with complete conversational context from previous analysis]
-
-### 2. P&L (Income Statement) Issues
-- [Red flag 1 with complete conversational context from previous analysis]
-- [Red flag 2 with complete conversational context from previous analysis]
-
-Continue this format for all 8 categories, ensuring every red flag with its complete conversational context from the previous analysis is categorized."""
-    
-    third_full_prompt = f"""You must answer the question strictly based on the below given context.
-
-Context:
-{pipeline_1st.docs[0]["context"]}
-
-Previous Analysis: {second_response}
-
-Based on the above analysis and the original context, please answer: {third_prompt}
-
-Answer:"""
-    
-    third_response = pipeline_1st.llm._call(third_full_prompt)
-    
-    # ITERATION 4: Detailed summary generation
-    print("Running 4th iteration - Summary Generation...")
-    fourth_prompt = """Based on the categorized red flags with their complete conversational context from the previous analysis, provide a comprehensive and detailed summary of each category of red flags. Follow these guidelines:
-
-1. **Retain all conversational information**: Ensure that no conversational details, questions, or responses are omitted during the summarization process
-2. **Maintain a neutral tone**: Present the summary in a factual and objective manner, avoiding any emotional or biased language
-3. **Focus on factual content**: Base the summary solely on the conversational information associated with each red flag
-4. **Include all red flags**: Incorporate every red flag within the category into the summary, without exception
-5. **Balance detail and concision**: Provide a summary that captures the conversational flow while being thorough and concise
-6. **Incorporate quantitative data**: Include all quantitative data and statistics mentioned in the conversations
-7. **Category-specific content**: Ensure that the summary captures the conversational context present within each category
-8. **Summary should be factual**: Avoid any subjective interpretations while preserving the conversational context
-
-Format the output exactly like this example:
-### 1. Balance Sheet Issues
-[Detailed paragraph summary of all balance sheet related red flags incorporating the conversational context, questions asked, management responses, and follow-up discussions with specific data points and factual information]
-
-### 2. P&L (Income Statement) Issues  
-[Detailed paragraph summary of all P&L related red flags incorporating the conversational context, questions asked, management responses, and follow-up discussions with specific data points and factual information]
-
-Continue this format for all 8 categories. Each summary should be a comprehensive paragraph that captures all the relevant red flags, their conversational contexts, and their details within that category."""
-    
-    fourth_full_prompt = f"""You must answer the question strictly based on the below given context.
-
-Context:
-{pipeline_1st.docs[0]["context"]}
-
-Previous Analysis: {third_response}
-
-Based on the above analysis and the original context, please answer: {fourth_prompt}
-
-Answer:"""
-    
-    fourth_response = pipeline_1st.llm._call(fourth_full_prompt)
-    
-    # Save all results together
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    all_results = pd.DataFrame({
-        "iteration": [1, 2, 3, 4],
-        "stage": [
-            "Initial Analysis with Conversational Context",
-            "Deduplication", 
-            "Categorization",
-            "Summary Generation"
-        ],
-        "prompt": [
-            first_results_df.iloc[0]['query'],  # Original query from 1st iteration
-            second_prompt,
-            third_prompt,
-            fourth_prompt
-        ],
-        "response": [
-            first_response,
-            second_response,
-            third_response,
-            fourth_response
-        ],
-        "timestamp": [timestamp, timestamp, timestamp, timestamp]
-    })
-    
-    # Save complete results
-    complete_output_file = f"complete_perplexity_pipeline_results_{timestamp}.xlsx"
-    
-    try:
-        # Save to Excel with proper formatting
-        with pd.ExcelWriter(complete_output_file, engine='openpyxl', options={'strings_to_urls': False}) as writer:
-            all_results.to_excel(writer, sheet_name='Complete_Pipeline', index=False)
-            
-            # Get the workbook and worksheet
-            workbook = writer.book
-            worksheet = writer.sheets['Complete_Pipeline']
-            
-            # Adjust column widths and enable text wrapping
-            for column in worksheet.columns:
-                max_length = 0
-                column_letter = column[0].column_letter
-                
-                for cell in column:
-                    try:
-                        if len(str(cell.value)) > max_length:
-                            max_length = len(str(cell.value))
-                    except:
-                        pass
-                
-                # Set column width (max 150 for response columns)
-                if column_letter in ['D', 'E']:  # Response columns typically
-                    adjusted_width = min(max_length + 2, 150)
-                else:
-                    adjusted_width = min(max_length + 2, 50)
-                    
-                worksheet.column_dimensions[column_letter].width = adjusted_width
-                
-                # Enable text wrapping
-                for cell in column:
-                    cell.alignment = cell.alignment.copy(wrap_text=True)
-        
-        print(f"Complete results saved to Excel: {complete_output_file}")
-        
-    except Exception as e:
-        print(f"Error saving to Excel: {e}")
-        # Fallback to CSV
-        complete_output_file = f"complete_perplexity_pipeline_results_{timestamp}.csv"
-        all_results.to_csv(complete_output_file, index=False, encoding='utf-8')
-        print(f"Fallback: Complete results saved to CSV: {complete_output_file}")
-    
-    print(f"Complete 4-iteration pipeline with Perplexity finished!")
-    print(f"1st iteration: {first_output_file}")
-    print(f"Complete results: {complete_output_file}")
-    print(f"Final categorized summary with conversational context is in row 4 of {complete_output_file}")
-    
-    return all_results
-
 def main():
-    """Example usage of the pipeline with Perplexity"""
-    # Configuration
-    pdf_path = r"C:\Users\DeshmukhK\Downloads\EWS\Earning call transcripts\Sterling Q2 FY23.pdf"
-    queries_csv_path = r"C:\Users\DeshmukhK\Downloads\EWS_LLAMA_prompts.xlsx"
+    """Main function to run the analysis"""
+    # Initialize analyzer
+    analyzer = FinancialRedFlagAnalyzer()
     
-    # For first iteration (if not already done)
-    pipeline = LlamaQueryPipeline(
-        pdf_path=pdf_path,
-        queries_csv_path=queries_csv_path,
-        llm_endpoint="https://as1-lower-llm.crisil.local/perplexity/llama/70b/llm/"
-    )
-    
-    # Uncomment below for first iteration
-    # results_df = pipeline.query_llama(maintain_conversation=True, enable_chaining=False)
-    # output_file = pipeline.save_results(results_df)
-    
-    return None
-
-def main_chained():
-    """Example usage for chained queries using previous results with Perplexity"""
-    # Configuration - Updated for relative paths
-    pdf_path = r"Kalyan June 24.pdf"
-    previous_results_path = r"perplexity_query_results.csv"  # Your existing results file
-    new_queries_csv_path = r"EWS_prompts_v2_iteration2.xlsx"  # New prompts for chaining
-    
-    # Initialize pipeline with previous results
-    pipeline = LlamaQueryPipeline(
-        pdf_path=pdf_path,
-        queries_csv_path=None,  # Not needed for chaining
-        previous_results_path=previous_results_path,
-        llm_endpoint="https://as1-lower-llm.crisil.local/perplexity/llama/70b/llm/"
-    )
-    
-    # Run chained queries (2nd iteration)
-    chained_results_df = pipeline.query_llama_with_chaining(new_queries_csv_path, iteration_number=2)
-    
-    # Save chained results
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    chained_output_file = f"perplexity_chained_results_iteration2_{timestamp}.xlsx"
+    # Specify your PDF path here
+    pdf_path = "your_earnings_call_transcript.pdf"  # Update this path
     
     try:
-        with pd.ExcelWriter(chained_output_file, engine='openpyxl', options={'strings_to_urls': False}) as writer:
-            chained_results_df.to_excel(writer, sheet_name='Chained_Results', index=False)
-            
-            # Format the Excel file
-            workbook = writer.book
-            worksheet = writer.sheets['Chained_Results']
-            
-            for column in worksheet.columns:
-                max_length = 0
-                column_letter = column[0].column_letter
-                
-                for cell in column:
-                    try:
-                        if len(str(cell.value)) > max_length:
-                            max_length = len(str(cell.value))
-                    except:
-                        pass
-                
-                adjusted_width = min(max_length + 2, 100)
-                worksheet.column_dimensions[column_letter].width = adjusted_width
-                
-                for cell in column:
-                    cell.alignment = cell.alignment.copy(wrap_text=True)
+        # Run analysis
+        results_df = analyzer.analyze_pdf(pdf_path)
         
-        print(f"Chained results saved to Excel: {chained_output_file}")
+        # Save to Excel
+        output_file = analyzer.save_to_excel(results_df)
+        
+        print(f"\nComplete 4-Iteration Analysis Summary:")
+        print(f"- Document analyzed: {pdf_path}")
+        print(f"- Total processing time: {results_df['processing_time_seconds'].sum():.2f} seconds")
+        print(f"- Output file: {output_file}")
+        
+        # Display iteration summary
+        print(f"\nIteration Summary:")
+        for idx, row in results_df.iterrows():
+            print(f"- Iteration {row['iteration']}: {row['stage']} ({row['processing_time_seconds']}s)")
+        
+        # Show snippet of final summary (iteration 4)
+        if len(results_df) >= 4:
+            final_summary = results_df.iloc[3]['response']
+            print(f"\nFinal Summary Preview (first 300 chars):")
+            print(f"{final_summary[:300]}...")
+        
+        return results_df
         
     except Exception as e:
-        print(f"Error saving to Excel: {e}")
-        chained_output_file = f"perplexity_chained_results_iteration2_{timestamp}.csv"
-        chained_results_df.to_csv(chained_output_file, index=False, encoding='utf-8')
-        print(f"Fallback: Chained results saved to CSV: {chained_output_file}")
-    
-    return chained_results_df
+        print(f"Error during analysis: {e}")
+        return None
 
 if __name__ == "__main__":
-    # Run the improved 4-iteration pipeline with Perplexity
-    all_results = run_four_iteration_pipeline()
+    main()
