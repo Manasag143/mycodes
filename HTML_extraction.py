@@ -6,7 +6,8 @@ import logging
 
 class RatingDriversExtractor:
     """
-    A pipeline to extract strengths and weaknesses from rating rationale HTML documents.
+    Simplified pipeline to extract strengths and weaknesses from rating rationale HTML documents.
+    Strategy: Extract target area first, then parse with simple HTML methods.
     """
     
     def __init__(self):
@@ -21,22 +22,13 @@ class RatingDriversExtractor:
         self.logger = logging.getLogger(__name__)
     
     def load_html_file(self, file_path: str) -> str:
-        """
-        Load HTML file and return content as string
-        
-        Args:
-            file_path (str): Path to the HTML file
-            
-        Returns:
-            str: HTML content
-        """
+        """Load HTML file and return content as string"""
         try:
             with open(file_path, 'r', encoding='utf-8') as file:
                 content = file.read()
             self.logger.info(f"Successfully loaded HTML file: {file_path}")
             return content
         except UnicodeDecodeError:
-            # Try with different encoding if UTF-8 fails
             with open(file_path, 'r', encoding='latin-1') as file:
                 content = file.read()
             self.logger.info(f"Loaded HTML file with latin-1 encoding: {file_path}")
@@ -45,304 +37,363 @@ class RatingDriversExtractor:
             self.logger.error(f"Error loading file {file_path}: {str(e)}")
             raise
     
-    def parse_html(self, html_content: str) -> BeautifulSoup:
+    def extract_target_area(self, html_content: str) -> Optional[str]:
         """
-        Parse HTML content using BeautifulSoup
+        Step 1: Extract the target area containing Key Rating Drivers
         
         Args:
-            html_content (str): Raw HTML content
+            html_content (str): Full HTML content
             
         Returns:
-            BeautifulSoup: Parsed HTML object
+            str: HTML content of the target area
         """
         try:
+            # Parse the full HTML
             soup = BeautifulSoup(html_content, 'html.parser')
-            self.logger.info("Successfully parsed HTML content")
-            return soup
+            
+            # Strategy 1: Find by text content "Key Rating Drivers"
+            target_text = soup.find(string=re.compile(r"Key Rating Drivers.*Detailed Description", re.IGNORECASE))
+            
+            if target_text:
+                # Get the parent container that has the full content
+                parent = target_text.find_parent()
+                
+                # Navigate up to find the table cell or div containing all the content
+                while parent and parent.name not in ['td', 'div']:
+                    parent = parent.find_parent()
+                
+                if parent:
+                    # Get the next sibling or parent that contains the actual content
+                    content_container = parent.find_next('td') or parent
+                    
+                    if content_container:
+                        target_html = str(content_container)
+                        self.logger.info(f"Found target area: {len(target_html)} characters")
+                        return target_html
+            
+            # Strategy 2: Search by specific HTML patterns
+            # Look for table cells containing the key terms
+            all_tds = soup.find_all('td')
+            for td in all_tds:
+                td_text = td.get_text()
+                if (len(td_text) > 1000 and  # Must be substantial content
+                    'Key Rating Drivers' in td_text and 
+                    'Strengths' in td_text and
+                    'Weakness' in td_text):
+                    
+                    target_html = str(td)
+                    self.logger.info(f"Found target area via TD search: {len(target_html)} characters")
+                    return target_html
+            
+            # Strategy 3: Look for div elements
+            all_divs = soup.find_all('div')
+            for div in all_divs:
+                div_text = div.get_text()
+                if (len(div_text) > 1000 and
+                    'Key Rating Drivers' in div_text and 
+                    'Strengths' in div_text):
+                    
+                    target_html = str(div)
+                    self.logger.info(f"Found target area via DIV search: {len(target_html)} characters")
+                    return target_html
+            
+            self.logger.warning("Could not find target area")
+            return None
+            
         except Exception as e:
-            self.logger.error(f"Error parsing HTML: {str(e)}")
-            raise
+            self.logger.error(f"Error extracting target area: {str(e)}")
+            return None
     
-    def find_rating_drivers_section(self, soup: BeautifulSoup) -> Optional[str]:
+    def find_keywords(self, target_html: str) -> Dict[str, List[int]]:
         """
-        Find the section containing Key Rating Drivers & Detailed Description
-        and return the text content
+        Step 2: Find keyword positions in the target area
         
         Args:
-            soup (BeautifulSoup): Parsed HTML object
+            target_html (str): HTML content of target area
             
         Returns:
-            str: Text content of the rating drivers section
+            Dict: Positions of key sections
         """
         try:
-            # Get all text content
-            full_text = soup.get_text()
+            # Convert to text for position finding
+            soup = BeautifulSoup(target_html, 'html.parser')
+            text = soup.get_text()
             
-            # Look for the Key Rating Drivers section
-            pattern = r'Key Rating Drivers.*?Detailed Description(.*?)(?=Analytical Approach|Liquidity|Outlook|$)'
-            match = re.search(pattern, full_text, re.DOTALL | re.IGNORECASE)
+            # Find keyword positions
+            positions = {}
             
-            if match:
-                section_text = match.group(1)
-                self.logger.info("Found Key Rating Drivers section")
-                return section_text
+            # Look for section headers
+            keywords = [
+                'Key Rating Drivers',
+                'Strengths:',
+                'Strengths',
+                'Weakness:',
+                'Weaknesses:',
+                'Weakness',
+                'Liquidity',
+                'Outlook',
+                'Analytical Approach'
+            ]
             
-            # Alternative pattern - look for just the content after "Key Rating Drivers"
-            pattern2 = r'Key Rating Drivers[^:]*:(.*?)(?=Analytical Approach|Liquidity|Outlook|About the Company|$)'
-            match2 = re.search(pattern2, full_text, re.DOTALL | re.IGNORECASE)
+            for keyword in keywords:
+                # Find all occurrences (case insensitive)
+                pattern = re.compile(re.escape(keyword), re.IGNORECASE)
+                matches = []
+                for match in pattern.finditer(text):
+                    matches.append(match.start())
+                
+                if matches:
+                    positions[keyword.lower()] = matches
             
-            if match2:
-                section_text = match2.group(1)
-                self.logger.info("Found Key Rating Drivers section (alternative pattern)")
-                return section_text
-            
-            self.logger.warning("Could not find Key Rating Drivers section")
-            return None
+            self.logger.info(f"Found keywords: {list(positions.keys())}")
+            return positions
             
         except Exception as e:
-            self.logger.error(f"Error finding rating drivers section: {str(e)}")
-            return None
+            self.logger.error(f"Error finding keywords: {str(e)}")
+            return {}
+    
+    def extract_sections(self, target_html: str, positions: Dict[str, List[int]]) -> Dict[str, str]:
+        """
+        Step 3: Extract text sections based on keyword positions
+        
+        Args:
+            target_html (str): HTML content of target area
+            positions (Dict): Keyword positions
+            
+        Returns:
+            Dict: Extracted sections
+        """
+        try:
+            soup = BeautifulSoup(target_html, 'html.parser')
+            text = soup.get_text()
+            
+            sections = {}
+            
+            # Find strengths section
+            strengths_start = None
+            for key in ['strengths:', 'strengths']:
+                if key in positions:
+                    strengths_start = positions[key][0]
+                    break
+            
+            # Find weakness section  
+            weakness_start = None
+            for key in ['weakness:', 'weaknesses:', 'weakness']:
+                if key in positions:
+                    weakness_start = positions[key][0]
+                    break
+            
+            # Find end boundaries
+            end_boundaries = []
+            for key in ['liquidity', 'outlook', 'analytical approach']:
+                if key in positions:
+                    end_boundaries.extend(positions[key])
+            
+            if strengths_start is not None:
+                # Find end of strengths section
+                strengths_end = weakness_start if weakness_start else (min(end_boundaries) if end_boundaries else len(text))
+                strengths_text = text[strengths_start:strengths_end]
+                sections['strengths'] = self.clean_text(strengths_text)
+                self.logger.info(f"Extracted strengths section: {len(strengths_text)} characters")
+            
+            if weakness_start is not None:
+                # Find end of weakness section
+                weakness_end = min(end_boundaries) if end_boundaries else len(text)
+                weakness_text = text[weakness_start:weakness_end]
+                sections['weaknesses'] = self.clean_text(weakness_text)
+                self.logger.info(f"Extracted weakness section: {len(weakness_text)} characters")
+            
+            return sections
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting sections: {str(e)}")
+            return {}
+    
+    def parse_bullet_points(self, section_text: str) -> Dict[str, str]:
+        """
+        Step 4: Parse bullet points from section text using simple patterns
+        
+        Args:
+            section_text (str): Text content of a section
+            
+        Returns:
+            Dict: Title -> Description mapping
+        """
+        try:
+            bullet_points = {}
+            
+            # Remove the section header
+            text = re.sub(r'^(Strengths?:|Weaknesses?:|Weakness:)', '', section_text, flags=re.IGNORECASE).strip()
+            
+            # Method 1: Look for bullet points marked by HTML list items or bullet symbols
+            # Split by potential bullet indicators
+            bullet_patterns = [
+                r'(?:^|\n)\s*[•·▪▫◦‣⁃]\s*',  # Unicode bullet points
+                r'(?:^|\n)\s*\*\s*',          # Asterisk bullets
+                r'(?:^|\n)\s*-\s*',           # Dash bullets
+                r'(?:^|\n)\s*\d+\.\s*',       # Numbered lists
+                r'(?:^|\n)\s*[a-zA-Z]\.\s*',  # Lettered lists
+            ]
+            
+            # Try each pattern
+            for pattern in bullet_patterns:
+                parts = re.split(pattern, text)
+                if len(parts) > 1:  # Found splits
+                    for part in parts[1:]:  # Skip first empty part
+                        part = part.strip()
+                        if len(part) > 20:  # Minimum meaningful length
+                            title, desc = self.extract_title_description(part)
+                            if title and desc:
+                                bullet_points[title] = desc
+                    
+                    if bullet_points:  # If we found something, stop trying other patterns
+                        break
+            
+            # Method 2: If no bullets found, look for bold patterns in HTML
+            if not bullet_points:
+                # Look for colon-separated items
+                colon_items = re.split(r'(?<=\.)\s+(?=[A-Z])', text)
+                
+                for item in colon_items:
+                    item = item.strip()
+                    if ':' in item and len(item) > 30:
+                        title, desc = self.extract_title_description(item)
+                        if title and desc:
+                            bullet_points[title] = desc
+            
+            # Method 3: Simple sentence-based extraction
+            if not bullet_points:
+                sentences = re.split(r'(?<=\.)\s+', text)
+                current_title = None
+                current_desc = ""
+                
+                for sentence in sentences:
+                    sentence = sentence.strip()
+                    if ':' in sentence and len(sentence) < 200:  # Likely a title
+                        if current_title and current_desc:
+                            bullet_points[current_title] = current_desc.strip()
+                        
+                        parts = sentence.split(':', 1)
+                        current_title = self.clean_text(parts[0])
+                        current_desc = self.clean_text(parts[1]) if len(parts) > 1 else ""
+                    else:
+                        if current_title:
+                            current_desc += " " + sentence
+                
+                # Add the last item
+                if current_title and current_desc:
+                    bullet_points[current_title] = current_desc.strip()
+            
+            self.logger.info(f"Parsed {len(bullet_points)} bullet points")
+            return bullet_points
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing bullet points: {str(e)}")
+            return {}
+    
+    def extract_title_description(self, text: str) -> tuple:
+        """
+        Extract title and description from a text item
+        
+        Args:
+            text (str): Text item to parse
+            
+        Returns:
+            tuple: (title, description)
+        """
+        try:
+            if ':' in text:
+                parts = text.split(':', 1)
+                title = self.clean_text(parts[0])
+                description = self.clean_text(parts[1])
+                
+                # Validate title and description
+                if (len(title) > 5 and len(title) < 200 and 
+                    len(description) > 20 and len(description) < 2000):
+                    return title, description
+            
+            return None, None
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting title/description: {str(e)}")
+            return None, None
     
     def clean_text(self, text: str) -> str:
-        """
-        Clean and normalize extracted text
-        
-        Args:
-            text (str): Raw text to clean
-            
-        Returns:
-            str: Cleaned text
-        """
+        """Clean and normalize text"""
         if not text:
             return ""
         
-        # Remove extra whitespace and newlines
+        # Remove extra whitespace
         text = re.sub(r'\s+', ' ', text)
         text = text.strip()
         
-        # Remove unwanted characters but keep essential punctuation
+        # Remove special characters but keep essential punctuation
         text = re.sub(r'[^\w\s.,;:()\-&%/~]', '', text)
         
         return text
     
-    def extract_strengths_and_weaknesses(self, section_text: str) -> Dict[str, Dict[str, str]]:
-        """
-        Extract strengths and weaknesses from the section text
-        
-        Args:
-            section_text (str): Text content of the rating drivers section
-            
-        Returns:
-            Dict: Dictionary containing strengths and weaknesses
-        """
-        result = {
-            "strengths": {},
-            "weaknesses": {}
-        }
-        
-        try:
-            # Clean the text first
-            section_text = self.clean_text(section_text)
-            
-            # Find the strengths section
-            strengths_pattern = r'Strengths?:\s*(.*?)(?=Weakness|$)'
-            strengths_match = re.search(strengths_pattern, section_text, re.DOTALL | re.IGNORECASE)
-            
-            if strengths_match:
-                strengths_text = strengths_match.group(1)
-                self.logger.info(f"Found strengths section: {len(strengths_text)} characters")
-                
-                # Extract individual strength items
-                # Look for bullet points or bold patterns followed by descriptions
-                strength_items = self.extract_bullet_items(strengths_text)
-                
-                for item in strength_items:
-                    if item['title'] and item['description']:
-                        result['strengths'][item['title']] = item['description']
-            
-            # Find the weaknesses section  
-            weakness_pattern = r'Weakness(?:es)?:\s*(.*?)$'
-            weakness_match = re.search(weakness_pattern, section_text, re.DOTALL | re.IGNORECASE)
-            
-            if weakness_match:
-                weakness_text = weakness_match.group(1)
-                self.logger.info(f"Found weakness section: {len(weakness_text)} characters")
-                
-                # Extract individual weakness items
-                weakness_items = self.extract_bullet_items(weakness_text)
-                
-                for item in weakness_items:
-                    if item['title'] and item['description']:
-                        result['weaknesses'][item['title']] = item['description']
-            
-            self.logger.info(f"Extracted {len(result['strengths'])} strengths and {len(result['weaknesses'])} weaknesses")
-            return result
-            
-        except Exception as e:
-            self.logger.error(f"Error extracting strengths and weaknesses: {str(e)}")
-            return {"strengths": {}, "weaknesses": {}}
-    
-    def extract_bullet_items(self, text: str) -> List[Dict[str, str]]:
-        """
-        Extract bullet point items from text
-        
-        Args:
-            text (str): Text containing bullet points
-            
-        Returns:
-            List[Dict]: List of extracted items with title and description
-        """
-        items = []
-        
-        try:
-            # Split by potential bullet point indicators
-            # The text uses bullet points that might not be standard characters
-            
-            # Method 1: Split by sentences and look for title: description pattern
-            sentences = re.split(r'(?<=\.)\s+(?=[A-Z])', text)
-            
-            for sentence in sentences:
-                # Look for pattern: "Title: Description"
-                if ':' in sentence and len(sentence) > 50:  # Minimum length for meaningful content
-                    colon_pos = sentence.find(':')
-                    potential_title = sentence[:colon_pos].strip()
-                    potential_desc = sentence[colon_pos+1:].strip()
-                    
-                    # Filter valid titles (should be meaningful phrases)
-                    if (len(potential_title) > 10 and len(potential_title) < 150 and 
-                        len(potential_desc) > 30):
-                        items.append({
-                            'title': potential_title,
-                            'description': potential_desc
-                        })
-            
-            # Method 2: If method 1 doesn't work, try paragraph-based splitting
-            if not items:
-                # Split by double spaces or line breaks that might indicate new items
-                paragraphs = re.split(r'\s{2,}', text)
-                
-                for para in paragraphs:
-                    para = para.strip()
-                    if ':' in para and len(para) > 50:
-                        colon_pos = para.find(':')
-                        potential_title = para[:colon_pos].strip()
-                        potential_desc = para[colon_pos+1:].strip()
-                        
-                        if (len(potential_title) > 10 and len(potential_title) < 150 and 
-                            len(potential_desc) > 30):
-                            items.append({
-                                'title': potential_title,
-                                'description': potential_desc
-                            })
-            
-            # Method 3: Look for patterns like "Strong position in..." or "Exposure to..."
-            if not items:
-                # Common starting patterns for strengths and weaknesses
-                patterns = [
-                    r'(Strong [^:]+):\s*([^.]+(?:\.[^.]*)*)',
-                    r'(Robust [^:]+):\s*([^.]+(?:\.[^.]*)*)', 
-                    r'(Exposure to [^:]+):\s*([^.]+(?:\.[^.]*)*)',
-                    r'([A-Z][^:]{20,100}):\s*([^.]+(?:\.[^.]*){2,})'
-                ]
-                
-                for pattern in patterns:
-                    matches = re.finditer(pattern, text, re.DOTALL)
-                    for match in matches:
-                        title = self.clean_text(match.group(1))
-                        desc = self.clean_text(match.group(2))
-                        if len(title) > 10 and len(desc) > 30:
-                            items.append({
-                                'title': title,
-                                'description': desc
-                            })
-            
-            self.logger.info(f"Extracted {len(items)} bullet items")
-            return items
-            
-        except Exception as e:
-            self.logger.error(f"Error extracting bullet items: {str(e)}")
-            return []
-    
     def extract_rating_drivers(self, file_path: str) -> Dict[str, Dict[str, str]]:
         """
-        Main pipeline method to extract rating drivers from HTML file
+        Main simplified pipeline
         
         Args:
-            file_path (str): Path to the HTML file
+            file_path (str): Path to HTML file
             
         Returns:
-            Dict: Dictionary containing strengths and weaknesses
+            Dict: Extracted strengths and weaknesses
         """
         try:
-            # Step 1: Load HTML file
+            # Step 1: Load HTML
             html_content = self.load_html_file(file_path)
             
-            # Step 2: Parse HTML
-            soup = self.parse_html(html_content)
+            # Step 2: Extract target area
+            target_html = self.extract_target_area(html_content)
+            if not target_html:
+                return {"strengths": {}, "weaknesses": {}}
             
-            # Step 3: Find rating drivers section text
-            section_text = self.find_rating_drivers_section(soup)
+            # Step 3: Find keywords
+            positions = self.find_keywords(target_html)
+            if not positions:
+                self.logger.warning("No keywords found")
+                return {"strengths": {}, "weaknesses": {}}
             
-            if section_text:
-                # Step 4: Extract strengths and weaknesses
-                result = self.extract_strengths_and_weaknesses(section_text)
-            else:
-                self.logger.warning("Could not find rating drivers section")
-                result = {"strengths": {}, "weaknesses": {}}
+            # Step 4: Extract sections
+            sections = self.extract_sections(target_html, positions)
             
-            # Validate results
+            # Step 5: Parse bullet points
+            result = {"strengths": {}, "weaknesses": {}}
+            
+            if 'strengths' in sections:
+                result['strengths'] = self.parse_bullet_points(sections['strengths'])
+            
+            if 'weaknesses' in sections:
+                result['weaknesses'] = self.parse_bullet_points(sections['weaknesses'])
+            
+            self.logger.info(f"Final result: {len(result['strengths'])} strengths, {len(result['weaknesses'])} weaknesses")
+            
+            # Debug output if nothing found
             if not result['strengths'] and not result['weaknesses']:
-                self.logger.warning("No strengths or weaknesses extracted - trying debug mode")
-                self.debug_extraction(soup)
+                self.debug_output(target_html, positions, sections)
             
             return result
             
         except Exception as e:
-            self.logger.error(f"Error in main extraction pipeline: {str(e)}")
+            self.logger.error(f"Error in main pipeline: {str(e)}")
             return {"strengths": {}, "weaknesses": {}}
     
-    def debug_extraction(self, soup: BeautifulSoup):
-        """
-        Debug method to help identify why extraction failed
+    def debug_output(self, target_html: str, positions: Dict, sections: Dict):
+        """Debug output to help troubleshoot"""
+        self.logger.info("=== DEBUG OUTPUT ===")
+        self.logger.info(f"Target HTML length: {len(target_html)}")
+        self.logger.info(f"Keyword positions: {positions}")
+        self.logger.info(f"Sections found: {list(sections.keys())}")
         
-        Args:
-            soup (BeautifulSoup): Parsed HTML object
-        """
-        try:
-            full_text = soup.get_text()
-            
-            # Check if key terms exist
-            has_key_terms = {
-                'Key Rating Drivers': 'Key Rating Drivers' in full_text,
-                'Strengths': 'Strengths' in full_text or 'strengths' in full_text.lower(),
-                'Weakness': 'Weakness' in full_text or 'weakness' in full_text.lower(),
-                'Strong position': 'Strong position' in full_text,
-                'Exposure to': 'Exposure to' in full_text
-            }
-            
-            self.logger.info("=== DEBUG INFO ===")
-            self.logger.info(f"Document length: {len(full_text)} characters")
-            for term, found in has_key_terms.items():
-                self.logger.info(f"'{term}' found: {found}")
-            
-            # Show a sample of text around "Strengths"
-            if has_key_terms['Strengths']:
-                strengths_pos = full_text.lower().find('strengths')
-                if strengths_pos > -1:
-                    sample = full_text[max(0, strengths_pos-100):strengths_pos+500]
-                    self.logger.info(f"Sample text around 'Strengths':\n{sample}")
-            
-        except Exception as e:
-            self.logger.error(f"Error in debug extraction: {str(e)}")
+        for section_name, section_text in sections.items():
+            self.logger.info(f"\n{section_name.upper()} SECTION ({len(section_text)} chars):")
+            self.logger.info(section_text[:500] + "..." if len(section_text) > 500 else section_text)
     
     def save_results(self, results: Dict[str, Dict[str, str]], output_path: str):
-        """
-        Save extraction results to JSON file
-        
-        Args:
-            results (Dict): Extracted results
-            output_path (str): Path to save JSON file
-        """
+        """Save results to JSON file"""
         try:
             with open(output_path, 'w', encoding='utf-8') as f:
                 json.dump(results, f, indent=2, ensure_ascii=False)
@@ -350,15 +401,12 @@ class RatingDriversExtractor:
         except Exception as e:
             self.logger.error(f"Error saving results: {str(e)}")
 
-# Example usage and testing
+# Example usage
 def main():
-    """
-    Example usage of the RatingDriversExtractor pipeline
-    """
-    # Initialize the extractor
+    """Example usage of the simplified pipeline"""
     extractor = RatingDriversExtractor()
     
-    # Example file path (replace with your actual file path)
+    # Replace with your actual file path
     file_path = "Rating Rationale.html"
     
     try:
@@ -366,7 +414,7 @@ def main():
         results = extractor.extract_rating_drivers(file_path)
         
         # Print results
-        print("=== EXTRACTION RESULTS ===")
+        print("=== SIMPLIFIED EXTRACTION RESULTS ===")
         print(f"\nFound {len(results['strengths'])} strengths:")
         for title, description in results['strengths'].items():
             print(f"\n📈 {title}")
@@ -377,7 +425,7 @@ def main():
             print(f"\n📉 {title}")
             print(f"   {description[:200]}..." if len(description) > 200 else f"   {description}")
         
-        # Save to JSON file
+        # Save results
         extractor.save_results(results, "extracted_rating_drivers.json")
         
         return results
