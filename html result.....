@@ -136,27 +136,254 @@ def extract_from_target_section(target_section):
         if len(text) > 20:
             print(f"      Element {i}: {element.name} - {text[:60]}...")
         
+        # Skip elements that contain "Key Rating Drivers" header text
+        if 'Key Rating Drivers' in text:
+            print(f"      🚫 Skipping header element: {text[:60]}...")
+            continue
+        
         # Check if this is a section header (Strengths/Weaknesses)
         if element.name in ['p', 'div']:
-            if re.search(r'\bStrengths?\s*:?\s*$', text, re.IGNORECASE):
+            # Look for standalone section headers (not mixed with content)
+            if re.search(r'^\s*Strengths?\s*:?\s*
+        
+        # Process list items within a section
+        if element.name == 'li' and current_section:
+            key, value = extract_key_value_from_element(element)
+            if key:
+                if current_section == 'strengths':
+                    strengths_dict[key] = value
+                    print(f"      ✅ Strength: {key[:50]}...")
+                elif current_section == 'weaknesses':
+                    weaknesses_dict[key] = value
+                    print(f"      ✅ Weakness: {key[:50]}...")
+        
+        # Also handle paragraphs and divs with bold content (alternative structure)
+        elif element.name in ['p', 'div'] and current_section and len(text) > 30:
+            key, value = extract_key_value_from_element(element)
+            if key:
+                if current_section == 'strengths':
+                    strengths_dict[key] = value
+                    print(f"      ✅ Strength: {key[:50]}...")
+                elif current_section == 'weaknesses':
+                    weaknesses_dict[key] = value
+                    print(f"      ✅ Weakness: {key[:50]}...")
+    
+    return strengths_dict, weaknesses_dict
+
+def extract_key_value_from_element(element):
+    """
+    Extract key-value pair from a single element
+    Enhanced to better handle bold text content
+    """
+    full_text = element.get_text().strip()
+    
+    # Skip if text is too short or contains unwanted headers
+    if (len(full_text) < 20 or 
+        'Key Rating Drivers' in full_text or
+        re.match(r'^\s*(Strengths?|Weakness(?:es)?)\s*:?\s*
+
+def clean_text(text):
+    """Clean and normalize text content."""
+    if not text:
+        return ""
+    
+    # Remove extra whitespace and normalize
+    text = re.sub(r'\s+', ' ', text)
+    text = text.strip()
+    
+    # Remove leading/trailing colons
+    text = text.strip(':').strip()
+    
+    # Remove section headers that might have leaked in
+    text = re.sub(r'^(Strengths?|Weakness(?:es)?)\s*:?\s*', '', text, flags=re.IGNORECASE)
+    
+    return text
+
+def debug_html_structure(html_file_path):
+    """Enhanced debug function for targeted area approach."""
+    with open(html_file_path, 'r', encoding='utf-8') as file:
+        soup = BeautifulSoup(file.read(), 'html.parser')
+    
+    print("🔍 DEBUGGING WITH TARGETED AREA APPROACH")
+    print("=" * 60)
+    
+    # Step 1: Show target area finding
+    target_section = find_target_area(soup)
+    
+    if target_section:
+        print(f"\n✅ Target area found!")
+        
+        # Show structure of target area
+        all_elements = target_section.find_all(['p', 'ul', 'li', 'div'])
+        print(f"📊 Target area contains {len(all_elements)} elements")
+        
+        # Show first few elements
+        print(f"\n📋 First 10 elements in target area:")
+        for i, element in enumerate(all_elements[:10]):
+            text = element.get_text().strip()
+            if text:
+                print(f"   {i+1}. {element.name}: {text[:80]}...")
+                
+                # Check for bold content
+                bold_spans = element.find_all('span')
+                bold_content = []
+                for span in bold_spans:
+                    if is_bold_element(span):
+                        bold_content.append(span.get_text().strip())
+                
+                strong_tags = [tag.get_text().strip() for tag in element.find_all(['strong', 'b'])]
+                
+                if bold_content or strong_tags:
+                    print(f"      🔥 Bold content: {bold_content + strong_tags}")
+        
+        # Check for section keywords
+        target_text = target_section.get_text()
+        strengths_count = target_text.lower().count('strengths')
+        weakness_count = target_text.lower().count('weakness')
+        
+        print(f"\n📊 Section analysis:")
+        print(f"   'Strengths' appears: {strengths_count} times")
+        print(f"   'Weakness' appears: {weakness_count} times")
+        
+    else:
+        print("❌ No target area found!")
+        
+        # Show what we can find in the whole document
+        full_text = soup.get_text()
+        print(f"📊 Full document length: {len(full_text)} characters")
+        
+        if 'Key Rating Drivers' in full_text:
+            print("✅ 'Key Rating Drivers' found in document")
+        if 'Strengths' in full_text:
+            print("✅ 'Strengths' found in document")
+        if 'Weakness' in full_text:
+            print("✅ 'Weakness' found in document")
+
+def process_folder(folder_path):
+    """Process all HTML files in a folder."""
+    all_results = {}
+    
+    # Find all HTML files
+    html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
+    
+    print(f"📁 Found {len(html_files)} HTML files")
+    
+    # Process each file
+    for filename in html_files:
+        file_path = os.path.join(folder_path, filename)
+        try:
+            print(f"\n{'='*60}")
+            print(f"🔄 Processing: {filename}")
+            print(f"{'='*60}")
+            
+            strengths, weaknesses = extract_strengths_weaknesses(file_path)
+            
+            file_key = filename.replace('.html', '').replace('.htm', '')
+            all_results[file_key] = {
+                'strengths': strengths,
+                'weaknesses': weaknesses
+            }
+            
+            print(f"✅ Completed {filename}: {len(strengths)} strengths, {len(weaknesses)} weaknesses")
+            
+        except Exception as e:
+            print(f"❌ Error with {filename}: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    return all_results
+
+def save_and_print_results(results):
+    """Save to JSON and print summary."""
+    # Clean results to remove empty keys
+    cleaned_results = {}
+    
+    for filename, data in results.items():
+        cleaned_strengths = {}
+        cleaned_weaknesses = {}
+        
+        # Clean strengths
+        for key, value in data['strengths'].items():
+            key = clean_text(key)
+            value = clean_text(value)
+            if key and len(key) > 3:  # Only keep meaningful keys
+                cleaned_strengths[key] = value
+        
+        # Clean weaknesses
+        for key, value in data['weaknesses'].items():
+            key = clean_text(key)
+            value = clean_text(value)
+            if key and len(key) > 3:  # Only keep meaningful keys
+                cleaned_weaknesses[key] = value
+        
+        cleaned_results[filename] = {
+            'strengths': cleaned_strengths,
+            'weaknesses': cleaned_weaknesses
+        }
+    
+    # Save to JSON
+    with open('extracted_results.json', 'w', encoding='utf-8') as f:
+        json.dump(cleaned_results, f, indent=2, ensure_ascii=False)
+    
+    # Print summary
+    print(f"\n{'='*80}")
+    print("📊 FINAL RESULTS SUMMARY")
+    print(f"{'='*80}")
+    
+    for filename, data in cleaned_results.items():
+        print(f"\n📄 {filename}:")
+        print(f"   📈 Strengths: {len(data['strengths'])}")
+        print(f"   📉 Weaknesses: {len(data['weaknesses'])}")
+        
+        # Print actual content
+        if data['strengths']:
+            print("\n   🔹 STRENGTHS:")
+            for i, (key, value) in enumerate(data['strengths'].items(), 1):
+                print(f"      {i}. {key}")
+                if value:
+                    print(f"         → {value[:100]}{'...' if len(value) > 100 else ''}")
+                print()
+        
+        if data['weaknesses']:
+            print("\n   🔸 WEAKNESSES:")
+            for i, (key, value) in enumerate(data['weaknesses'].items(), 1):
+                print(f"      {i}. {key}")
+                if value:
+                    print(f"         → {value[:100]}{'...' if len(value) > 100 else ''}")
+                print()
+    
+    print(f"\n💾 Results saved to 'extracted_results.json'")
+
+if __name__ == "__main__":
+    folder_path = 'html_files'
+    
+    # Check if folder exists
+    if not os.path.exists(folder_path):
+        print(f"❌ Folder '{folder_path}' not found!")
+        exit()
+    
+    # Debug first file
+    html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
+    if html_files:
+        print("🔍 Debugging first HTML file with targeted area approach...")
+        debug_html_structure(os.path.join(folder_path, html_files[0]))
+        print("\n" + "="*80)
+        
+
+    
+    # Process all files
+    print("\n🚀 Processing all HTML files with targeted area approach...")
+    results = process_folder(folder_path)
+    
+    if results:
+        save_and_print_results(results)
+    else:
+        print("❌ No HTML files found or processed successfully!")
+, text, re.IGNORECASE):
                 current_section = 'strengths'
                 print(f"      📍 Found Strengths header at element {i}")
                 continue
-            elif re.search(r'\bWeakness(es)?\s*:?\s*$', text, re.IGNORECASE):
-                current_section = 'weaknesses'
-                print(f"      📍 Found Weaknesses header at element {i}")
-                continue
-        
-        # Also check for headers that contain content (like "Strengths: content here")
-        if current_section is None:
-            if 'Strengths:' in text and len(text) > 20:
-                current_section = 'strengths'
-                print(f"      📍 Found Strengths section with content at element {i}")
-                # Process this element as content too
-            elif 'Weakness' in text and len(text) > 20:
-                current_section = 'weaknesses'
-                print(f"      📍 Found Weaknesses section with content at element {i}")
-                # Process this element as content too
+            elif re.search(r'^\s*Weakness(es)?\s*:?\s*
         
         # Process list items within a section
         if element.name == 'li' and current_section:
@@ -425,10 +652,1180 @@ if __name__ == "__main__":
         debug_html_structure(os.path.join(folder_path, html_files[0]))
         print("\n" + "="*80)
         
-        response = input(f"\n🤔 Continue processing all {len(html_files)} files? (y/n): ").lower()
-        if response != 'y':
-            print("👋 Exiting...")
-            exit()
+
+    
+    # Process all files
+    print("\n🚀 Processing all HTML files with targeted area approach...")
+    results = process_folder(folder_path)
+    
+    if results:
+        save_and_print_results(results)
+    else:
+        print("❌ No HTML files found or processed successfully!")
+, text, re.IGNORECASE):
+                current_section = 'weaknesses'
+                print(f"      📍 Found Weaknesses header at element {i}")
+                continue
+            # Look for section headers that are followed by a colon and then content
+            elif re.search(r'^\s*Strengths?\s*:\s*.+', text, re.IGNORECASE):
+                current_section = 'strengths'
+                print(f"      📍 Found Strengths section with content at element {i}")
+                # Don't continue - process this element as content too
+            elif re.search(r'^\s*Weakness(es)?\s*:\s*.+', text, re.IGNORECASE):
+                current_section = 'weaknesses'
+                print(f"      📍 Found Weaknesses section with content at element {i}")
+                # Don't continue - process this element as content too
+        
+        # Process list items within a section
+        if element.name == 'li' and current_section:
+            key, value = extract_key_value_from_element(element)
+            if key:
+                if current_section == 'strengths':
+                    strengths_dict[key] = value
+                    print(f"      ✅ Strength: {key[:50]}...")
+                elif current_section == 'weaknesses':
+                    weaknesses_dict[key] = value
+                    print(f"      ✅ Weakness: {key[:50]}...")
+        
+        # Also handle paragraphs and divs with bold content (alternative structure)
+        elif element.name in ['p', 'div'] and current_section and len(text) > 30:
+            key, value = extract_key_value_from_element(element)
+            if key:
+                if current_section == 'strengths':
+                    strengths_dict[key] = value
+                    print(f"      ✅ Strength: {key[:50]}...")
+                elif current_section == 'weaknesses':
+                    weaknesses_dict[key] = value
+                    print(f"      ✅ Weakness: {key[:50]}...")
+    
+    return strengths_dict, weaknesses_dict
+
+def extract_key_value_from_element(element):
+    """
+    Extract key-value pair from a single element
+    This uses the same logic as the working code
+    """
+    # Look for bold elements within this element
+    bold_elements = []
+    
+    # Find all spans with bold styling
+    spans = element.find_all('span')
+    for span in spans:
+        if is_bold_element(span):
+            bold_elements.append(span)
+    
+    # Also check for strong/b tags
+    bold_tags = element.find_all(['strong', 'b'])
+    bold_elements.extend(bold_tags)
+    
+    if bold_elements:
+        # Get the first bold element as the key
+        key_element = bold_elements[0]
+        key = key_element.get_text().strip().rstrip(':')
+        
+        # Get the full text and remove the key part to get the value
+        full_text = element.get_text().strip()
+        key_text = key_element.get_text().strip()
+        
+        # Remove the key from the full text to get the value
+        if key_text in full_text:
+            value = full_text.replace(key_text, '', 1).strip()
+            # Remove leading colon if present
+            value = value.lstrip(':').strip()
+        else:
+            value = full_text
+        
+        # Validate the key (must be meaningful)
+        if key and len(key) > 5 and len(key) < 300:
+            # Clean up the key and value
+            key = clean_text(key)
+            value = clean_text(value)
+            return key, value
+    
+    # If no bold elements found, try colon-based extraction
+    full_text = element.get_text().strip()
+    if ':' in full_text and len(full_text) > 30:
+        colon_pos = full_text.find(':')
+        potential_key = full_text[:colon_pos].strip()
+        potential_value = full_text[colon_pos+1:].strip()
+        
+        # Validate the potential key
+        if (len(potential_key) > 5 and len(potential_key) < 300 and
+            not potential_key.lower().startswith(('the ', 'this ', 'it '))):
+            return clean_text(potential_key), clean_text(potential_value)
+    
+    return None, None
+
+def clean_text(text):
+    """Clean and normalize text content."""
+    if not text:
+        return ""
+    
+    # Remove extra whitespace and normalize
+    text = re.sub(r'\s+', ' ', text)
+    text = text.strip()
+    
+    # Remove leading/trailing colons
+    text = text.strip(':').strip()
+    
+    # Remove section headers that might have leaked in
+    text = re.sub(r'^(Strengths?|Weakness(?:es)?)\s*:?\s*', '', text, flags=re.IGNORECASE)
+    
+    return text
+
+def debug_html_structure(html_file_path):
+    """Enhanced debug function for targeted area approach."""
+    with open(html_file_path, 'r', encoding='utf-8') as file:
+        soup = BeautifulSoup(file.read(), 'html.parser')
+    
+    print("🔍 DEBUGGING WITH TARGETED AREA APPROACH")
+    print("=" * 60)
+    
+    # Step 1: Show target area finding
+    target_section = find_target_area(soup)
+    
+    if target_section:
+        print(f"\n✅ Target area found!")
+        
+        # Show structure of target area
+        all_elements = target_section.find_all(['p', 'ul', 'li', 'div'])
+        print(f"📊 Target area contains {len(all_elements)} elements")
+        
+        # Show first few elements
+        print(f"\n📋 First 10 elements in target area:")
+        for i, element in enumerate(all_elements[:10]):
+            text = element.get_text().strip()
+            if text:
+                print(f"   {i+1}. {element.name}: {text[:80]}...")
+                
+                # Check for bold content
+                bold_spans = element.find_all('span')
+                bold_content = []
+                for span in bold_spans:
+                    if is_bold_element(span):
+                        bold_content.append(span.get_text().strip())
+                
+                strong_tags = [tag.get_text().strip() for tag in element.find_all(['strong', 'b'])]
+                
+                if bold_content or strong_tags:
+                    print(f"      🔥 Bold content: {bold_content + strong_tags}")
+        
+        # Check for section keywords
+        target_text = target_section.get_text()
+        strengths_count = target_text.lower().count('strengths')
+        weakness_count = target_text.lower().count('weakness')
+        
+        print(f"\n📊 Section analysis:")
+        print(f"   'Strengths' appears: {strengths_count} times")
+        print(f"   'Weakness' appears: {weakness_count} times")
+        
+    else:
+        print("❌ No target area found!")
+        
+        # Show what we can find in the whole document
+        full_text = soup.get_text()
+        print(f"📊 Full document length: {len(full_text)} characters")
+        
+        if 'Key Rating Drivers' in full_text:
+            print("✅ 'Key Rating Drivers' found in document")
+        if 'Strengths' in full_text:
+            print("✅ 'Strengths' found in document")
+        if 'Weakness' in full_text:
+            print("✅ 'Weakness' found in document")
+
+def process_folder(folder_path):
+    """Process all HTML files in a folder."""
+    all_results = {}
+    
+    # Find all HTML files
+    html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
+    
+    print(f"📁 Found {len(html_files)} HTML files")
+    
+    # Process each file
+    for filename in html_files:
+        file_path = os.path.join(folder_path, filename)
+        try:
+            print(f"\n{'='*60}")
+            print(f"🔄 Processing: {filename}")
+            print(f"{'='*60}")
+            
+            strengths, weaknesses = extract_strengths_weaknesses(file_path)
+            
+            file_key = filename.replace('.html', '').replace('.htm', '')
+            all_results[file_key] = {
+                'strengths': strengths,
+                'weaknesses': weaknesses
+            }
+            
+            print(f"✅ Completed {filename}: {len(strengths)} strengths, {len(weaknesses)} weaknesses")
+            
+        except Exception as e:
+            print(f"❌ Error with {filename}: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    return all_results
+
+def save_and_print_results(results):
+    """Save to JSON and print summary."""
+    # Clean results to remove empty keys
+    cleaned_results = {}
+    
+    for filename, data in results.items():
+        cleaned_strengths = {}
+        cleaned_weaknesses = {}
+        
+        # Clean strengths
+        for key, value in data['strengths'].items():
+            key = clean_text(key)
+            value = clean_text(value)
+            if key and len(key) > 3:  # Only keep meaningful keys
+                cleaned_strengths[key] = value
+        
+        # Clean weaknesses
+        for key, value in data['weaknesses'].items():
+            key = clean_text(key)
+            value = clean_text(value)
+            if key and len(key) > 3:  # Only keep meaningful keys
+                cleaned_weaknesses[key] = value
+        
+        cleaned_results[filename] = {
+            'strengths': cleaned_strengths,
+            'weaknesses': cleaned_weaknesses
+        }
+    
+    # Save to JSON
+    with open('extracted_results.json', 'w', encoding='utf-8') as f:
+        json.dump(cleaned_results, f, indent=2, ensure_ascii=False)
+    
+    # Print summary
+    print(f"\n{'='*80}")
+    print("📊 FINAL RESULTS SUMMARY")
+    print(f"{'='*80}")
+    
+    for filename, data in cleaned_results.items():
+        print(f"\n📄 {filename}:")
+        print(f"   📈 Strengths: {len(data['strengths'])}")
+        print(f"   📉 Weaknesses: {len(data['weaknesses'])}")
+        
+        # Print actual content
+        if data['strengths']:
+            print("\n   🔹 STRENGTHS:")
+            for i, (key, value) in enumerate(data['strengths'].items(), 1):
+                print(f"      {i}. {key}")
+                if value:
+                    print(f"         → {value[:100]}{'...' if len(value) > 100 else ''}")
+                print()
+        
+        if data['weaknesses']:
+            print("\n   🔸 WEAKNESSES:")
+            for i, (key, value) in enumerate(data['weaknesses'].items(), 1):
+                print(f"      {i}. {key}")
+                if value:
+                    print(f"         → {value[:100]}{'...' if len(value) > 100 else ''}")
+                print()
+    
+    print(f"\n💾 Results saved to 'extracted_results.json'")
+
+if __name__ == "__main__":
+    folder_path = 'html_files'
+    
+    # Check if folder exists
+    if not os.path.exists(folder_path):
+        print(f"❌ Folder '{folder_path}' not found!")
+        exit()
+    
+    # Debug first file
+    html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
+    if html_files:
+        print("🔍 Debugging first HTML file with targeted area approach...")
+        debug_html_structure(os.path.join(folder_path, html_files[0]))
+        print("\n" + "="*80)
+        
+
+    
+    # Process all files
+    print("\n🚀 Processing all HTML files with targeted area approach...")
+    results = process_folder(folder_path)
+    
+    if results:
+        save_and_print_results(results)
+    else:
+        print("❌ No HTML files found or processed successfully!")
+, full_text, re.IGNORECASE)):
+        return None, None
+    
+    # Method 1: Look for bold elements within this element
+    bold_elements = []
+    
+    # Find all spans with bold styling
+    spans = element.find_all('span')
+    for span in spans:
+        if is_bold_element(span):
+            bold_text = span.get_text().strip()
+            if bold_text and len(bold_text) > 3:  # Must be meaningful
+                bold_elements.append((span, bold_text))
+    
+    # Also check for strong/b tags
+    bold_tags = element.find_all(['strong', 'b'])
+    for tag in bold_tags:
+        bold_text = tag.get_text().strip()
+        if bold_text and len(bold_text) > 3:
+            bold_elements.append((tag, bold_text))
+    
+    # Method 2: If we found bold elements, extract key and value properly
+    if bold_elements:
+        # Sort by length to get the most complete bold text as title
+        bold_elements.sort(key=lambda x: len(x[1]), reverse=True)
+        
+        # Try each bold element as potential key
+        for bold_element, bold_text in bold_elements:
+            # Clean the bold text to use as key
+            potential_key = bold_text.rstrip(':').strip()
+            
+            # Validate the key
+            if (len(potential_key) > 5 and len(potential_key) < 300 and
+                not potential_key.lower().startswith(('the ', 'this ', 'it ', 'there ')) and
+                not re.match(r'^\s*(Strengths?|Weakness(?:es)?)', potential_key, re.IGNORECASE)):
+                
+                # Method 2a: Try to get description by removing bold text from full text
+                remaining_text = full_text
+                
+                # Remove the bold text from the full text
+                if bold_text in remaining_text:
+                    remaining_text = remaining_text.replace(bold_text, '', 1)
+                
+                # Clean up the remaining text
+                description = remaining_text.strip().lstrip(':').strip()
+                
+                # Method 2b: If description is empty or too short, try HTML-based extraction
+                if not description or len(description) < 10:
+                    # Create a copy of the element and remove the bold element
+                    temp_element = BeautifulSoup(str(element), 'html.parser')
+                    
+                    # Find and remove the bold element in the copy
+                    if bold_element.name == 'span':
+                        temp_spans = temp_element.find_all('span')
+                        for temp_span in temp_spans:
+                            if (is_bold_element(temp_span) and 
+                                temp_span.get_text().strip() == bold_text):
+                                temp_span.decompose()
+                                break
+                    else:
+                        temp_bolds = temp_element.find_all(bold_element.name)
+                        for temp_bold in temp_bolds:
+                            if temp_bold.get_text().strip() == bold_text:
+                                temp_bold.decompose()
+                                break
+                    
+                    description = temp_element.get_text().strip().lstrip(':').strip()
+                
+                # Validate and return
+                if potential_key:
+                    key = clean_text(potential_key)
+                    value = clean_text(description) if description else ""
+                    
+                    if key and len(key) > 5:
+                        return key, value
+    
+    # Method 3: If no bold elements, try colon-based extraction
+    if ':' in full_text:
+        # Look for the first colon that separates title from description
+        colon_pos = full_text.find(':')
+        potential_key = full_text[:colon_pos].strip()
+        potential_value = full_text[colon_pos+1:].strip()
+        
+        # Validate the potential key
+        if (len(potential_key) > 5 and len(potential_key) < 300 and
+            not potential_key.lower().startswith(('the ', 'this ', 'it ', 'there ')) and
+            not re.match(r'^\s*(Strengths?|Weakness(?:es)?)', potential_key, re.IGNORECASE)):
+            
+            return clean_text(potential_key), clean_text(potential_value)
+    
+    # Method 4: Pattern-based extraction for common phrases
+    patterns = [
+        r'^(Strong [^:]{10,200}):\s*(.+)',
+        r'^(Robust [^:]{10,200}):\s*(.+)',
+        r'^(Exposure to [^:]{10,200}):\s*(.+)',
+        r'^(Well-positioned [^:]{10,200}):\s*(.+)',
+        r'^([A-Z][^:]{15,200}):\s*(.+)'
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, full_text, re.DOTALL)
+        if match:
+            potential_key = match.group(1).strip()
+            potential_value = match.group(2).strip()
+            
+            if (len(potential_key) > 5 and
+                not re.match(r'^\s*(Strengths?|Weakness(?:es)?)', potential_key, re.IGNORECASE)):
+                return clean_text(potential_key), clean_text(potential_value)
+    
+    return None, None
+
+def clean_text(text):
+    """Clean and normalize text content."""
+    if not text:
+        return ""
+    
+    # Remove extra whitespace and normalize
+    text = re.sub(r'\s+', ' ', text)
+    text = text.strip()
+    
+    # Remove leading/trailing colons
+    text = text.strip(':').strip()
+    
+    # Remove section headers that might have leaked in
+    text = re.sub(r'^(Strengths?|Weakness(?:es)?)\s*:?\s*', '', text, flags=re.IGNORECASE)
+    
+    return text
+
+def debug_html_structure(html_file_path):
+    """Enhanced debug function for targeted area approach."""
+    with open(html_file_path, 'r', encoding='utf-8') as file:
+        soup = BeautifulSoup(file.read(), 'html.parser')
+    
+    print("🔍 DEBUGGING WITH TARGETED AREA APPROACH")
+    print("=" * 60)
+    
+    # Step 1: Show target area finding
+    target_section = find_target_area(soup)
+    
+    if target_section:
+        print(f"\n✅ Target area found!")
+        
+        # Show structure of target area
+        all_elements = target_section.find_all(['p', 'ul', 'li', 'div'])
+        print(f"📊 Target area contains {len(all_elements)} elements")
+        
+        # Show first few elements
+        print(f"\n📋 First 10 elements in target area:")
+        for i, element in enumerate(all_elements[:10]):
+            text = element.get_text().strip()
+            if text:
+                print(f"   {i+1}. {element.name}: {text[:80]}...")
+                
+                # Check for bold content
+                bold_spans = element.find_all('span')
+                bold_content = []
+                for span in bold_spans:
+                    if is_bold_element(span):
+                        bold_content.append(span.get_text().strip())
+                
+                strong_tags = [tag.get_text().strip() for tag in element.find_all(['strong', 'b'])]
+                
+                if bold_content or strong_tags:
+                    print(f"      🔥 Bold content: {bold_content + strong_tags}")
+        
+        # Check for section keywords
+        target_text = target_section.get_text()
+        strengths_count = target_text.lower().count('strengths')
+        weakness_count = target_text.lower().count('weakness')
+        
+        print(f"\n📊 Section analysis:")
+        print(f"   'Strengths' appears: {strengths_count} times")
+        print(f"   'Weakness' appears: {weakness_count} times")
+        
+    else:
+        print("❌ No target area found!")
+        
+        # Show what we can find in the whole document
+        full_text = soup.get_text()
+        print(f"📊 Full document length: {len(full_text)} characters")
+        
+        if 'Key Rating Drivers' in full_text:
+            print("✅ 'Key Rating Drivers' found in document")
+        if 'Strengths' in full_text:
+            print("✅ 'Strengths' found in document")
+        if 'Weakness' in full_text:
+            print("✅ 'Weakness' found in document")
+
+def process_folder(folder_path):
+    """Process all HTML files in a folder."""
+    all_results = {}
+    
+    # Find all HTML files
+    html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
+    
+    print(f"📁 Found {len(html_files)} HTML files")
+    
+    # Process each file
+    for filename in html_files:
+        file_path = os.path.join(folder_path, filename)
+        try:
+            print(f"\n{'='*60}")
+            print(f"🔄 Processing: {filename}")
+            print(f"{'='*60}")
+            
+            strengths, weaknesses = extract_strengths_weaknesses(file_path)
+            
+            file_key = filename.replace('.html', '').replace('.htm', '')
+            all_results[file_key] = {
+                'strengths': strengths,
+                'weaknesses': weaknesses
+            }
+            
+            print(f"✅ Completed {filename}: {len(strengths)} strengths, {len(weaknesses)} weaknesses")
+            
+        except Exception as e:
+            print(f"❌ Error with {filename}: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    return all_results
+
+def save_and_print_results(results):
+    """Save to JSON and print summary."""
+    # Clean results to remove empty keys
+    cleaned_results = {}
+    
+    for filename, data in results.items():
+        cleaned_strengths = {}
+        cleaned_weaknesses = {}
+        
+        # Clean strengths
+        for key, value in data['strengths'].items():
+            key = clean_text(key)
+            value = clean_text(value)
+            if key and len(key) > 3:  # Only keep meaningful keys
+                cleaned_strengths[key] = value
+        
+        # Clean weaknesses
+        for key, value in data['weaknesses'].items():
+            key = clean_text(key)
+            value = clean_text(value)
+            if key and len(key) > 3:  # Only keep meaningful keys
+                cleaned_weaknesses[key] = value
+        
+        cleaned_results[filename] = {
+            'strengths': cleaned_strengths,
+            'weaknesses': cleaned_weaknesses
+        }
+    
+    # Save to JSON
+    with open('extracted_results.json', 'w', encoding='utf-8') as f:
+        json.dump(cleaned_results, f, indent=2, ensure_ascii=False)
+    
+    # Print summary
+    print(f"\n{'='*80}")
+    print("📊 FINAL RESULTS SUMMARY")
+    print(f"{'='*80}")
+    
+    for filename, data in cleaned_results.items():
+        print(f"\n📄 {filename}:")
+        print(f"   📈 Strengths: {len(data['strengths'])}")
+        print(f"   📉 Weaknesses: {len(data['weaknesses'])}")
+        
+        # Print actual content
+        if data['strengths']:
+            print("\n   🔹 STRENGTHS:")
+            for i, (key, value) in enumerate(data['strengths'].items(), 1):
+                print(f"      {i}. {key}")
+                if value:
+                    print(f"         → {value[:100]}{'...' if len(value) > 100 else ''}")
+                print()
+        
+        if data['weaknesses']:
+            print("\n   🔸 WEAKNESSES:")
+            for i, (key, value) in enumerate(data['weaknesses'].items(), 1):
+                print(f"      {i}. {key}")
+                if value:
+                    print(f"         → {value[:100]}{'...' if len(value) > 100 else ''}")
+                print()
+    
+    print(f"\n💾 Results saved to 'extracted_results.json'")
+
+if __name__ == "__main__":
+    folder_path = 'html_files'
+    
+    # Check if folder exists
+    if not os.path.exists(folder_path):
+        print(f"❌ Folder '{folder_path}' not found!")
+        exit()
+    
+    # Debug first file
+    html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
+    if html_files:
+        print("🔍 Debugging first HTML file with targeted area approach...")
+        debug_html_structure(os.path.join(folder_path, html_files[0]))
+        print("\n" + "="*80)
+        
+
+    
+    # Process all files
+    print("\n🚀 Processing all HTML files with targeted area approach...")
+    results = process_folder(folder_path)
+    
+    if results:
+        save_and_print_results(results)
+    else:
+        print("❌ No HTML files found or processed successfully!")
+, text, re.IGNORECASE):
+                current_section = 'strengths'
+                print(f"      📍 Found Strengths header at element {i}")
+                continue
+            elif re.search(r'^\s*Weakness(es)?\s*:?\s*
+        
+        # Process list items within a section
+        if element.name == 'li' and current_section:
+            key, value = extract_key_value_from_element(element)
+            if key:
+                if current_section == 'strengths':
+                    strengths_dict[key] = value
+                    print(f"      ✅ Strength: {key[:50]}...")
+                elif current_section == 'weaknesses':
+                    weaknesses_dict[key] = value
+                    print(f"      ✅ Weakness: {key[:50]}...")
+        
+        # Also handle paragraphs and divs with bold content (alternative structure)
+        elif element.name in ['p', 'div'] and current_section and len(text) > 30:
+            key, value = extract_key_value_from_element(element)
+            if key:
+                if current_section == 'strengths':
+                    strengths_dict[key] = value
+                    print(f"      ✅ Strength: {key[:50]}...")
+                elif current_section == 'weaknesses':
+                    weaknesses_dict[key] = value
+                    print(f"      ✅ Weakness: {key[:50]}...")
+    
+    return strengths_dict, weaknesses_dict
+
+def extract_key_value_from_element(element):
+    """
+    Extract key-value pair from a single element
+    This uses the same logic as the working code
+    """
+    # Look for bold elements within this element
+    bold_elements = []
+    
+    # Find all spans with bold styling
+    spans = element.find_all('span')
+    for span in spans:
+        if is_bold_element(span):
+            bold_elements.append(span)
+    
+    # Also check for strong/b tags
+    bold_tags = element.find_all(['strong', 'b'])
+    bold_elements.extend(bold_tags)
+    
+    if bold_elements:
+        # Get the first bold element as the key
+        key_element = bold_elements[0]
+        key = key_element.get_text().strip().rstrip(':')
+        
+        # Get the full text and remove the key part to get the value
+        full_text = element.get_text().strip()
+        key_text = key_element.get_text().strip()
+        
+        # Remove the key from the full text to get the value
+        if key_text in full_text:
+            value = full_text.replace(key_text, '', 1).strip()
+            # Remove leading colon if present
+            value = value.lstrip(':').strip()
+        else:
+            value = full_text
+        
+        # Validate the key (must be meaningful)
+        if key and len(key) > 5 and len(key) < 300:
+            # Clean up the key and value
+            key = clean_text(key)
+            value = clean_text(value)
+            return key, value
+    
+    # If no bold elements found, try colon-based extraction
+    full_text = element.get_text().strip()
+    if ':' in full_text and len(full_text) > 30:
+        colon_pos = full_text.find(':')
+        potential_key = full_text[:colon_pos].strip()
+        potential_value = full_text[colon_pos+1:].strip()
+        
+        # Validate the potential key
+        if (len(potential_key) > 5 and len(potential_key) < 300 and
+            not potential_key.lower().startswith(('the ', 'this ', 'it '))):
+            return clean_text(potential_key), clean_text(potential_value)
+    
+    return None, None
+
+def clean_text(text):
+    """Clean and normalize text content."""
+    if not text:
+        return ""
+    
+    # Remove extra whitespace and normalize
+    text = re.sub(r'\s+', ' ', text)
+    text = text.strip()
+    
+    # Remove leading/trailing colons
+    text = text.strip(':').strip()
+    
+    # Remove section headers that might have leaked in
+    text = re.sub(r'^(Strengths?|Weakness(?:es)?)\s*:?\s*', '', text, flags=re.IGNORECASE)
+    
+    return text
+
+def debug_html_structure(html_file_path):
+    """Enhanced debug function for targeted area approach."""
+    with open(html_file_path, 'r', encoding='utf-8') as file:
+        soup = BeautifulSoup(file.read(), 'html.parser')
+    
+    print("🔍 DEBUGGING WITH TARGETED AREA APPROACH")
+    print("=" * 60)
+    
+    # Step 1: Show target area finding
+    target_section = find_target_area(soup)
+    
+    if target_section:
+        print(f"\n✅ Target area found!")
+        
+        # Show structure of target area
+        all_elements = target_section.find_all(['p', 'ul', 'li', 'div'])
+        print(f"📊 Target area contains {len(all_elements)} elements")
+        
+        # Show first few elements
+        print(f"\n📋 First 10 elements in target area:")
+        for i, element in enumerate(all_elements[:10]):
+            text = element.get_text().strip()
+            if text:
+                print(f"   {i+1}. {element.name}: {text[:80]}...")
+                
+                # Check for bold content
+                bold_spans = element.find_all('span')
+                bold_content = []
+                for span in bold_spans:
+                    if is_bold_element(span):
+                        bold_content.append(span.get_text().strip())
+                
+                strong_tags = [tag.get_text().strip() for tag in element.find_all(['strong', 'b'])]
+                
+                if bold_content or strong_tags:
+                    print(f"      🔥 Bold content: {bold_content + strong_tags}")
+        
+        # Check for section keywords
+        target_text = target_section.get_text()
+        strengths_count = target_text.lower().count('strengths')
+        weakness_count = target_text.lower().count('weakness')
+        
+        print(f"\n📊 Section analysis:")
+        print(f"   'Strengths' appears: {strengths_count} times")
+        print(f"   'Weakness' appears: {weakness_count} times")
+        
+    else:
+        print("❌ No target area found!")
+        
+        # Show what we can find in the whole document
+        full_text = soup.get_text()
+        print(f"📊 Full document length: {len(full_text)} characters")
+        
+        if 'Key Rating Drivers' in full_text:
+            print("✅ 'Key Rating Drivers' found in document")
+        if 'Strengths' in full_text:
+            print("✅ 'Strengths' found in document")
+        if 'Weakness' in full_text:
+            print("✅ 'Weakness' found in document")
+
+def process_folder(folder_path):
+    """Process all HTML files in a folder."""
+    all_results = {}
+    
+    # Find all HTML files
+    html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
+    
+    print(f"📁 Found {len(html_files)} HTML files")
+    
+    # Process each file
+    for filename in html_files:
+        file_path = os.path.join(folder_path, filename)
+        try:
+            print(f"\n{'='*60}")
+            print(f"🔄 Processing: {filename}")
+            print(f"{'='*60}")
+            
+            strengths, weaknesses = extract_strengths_weaknesses(file_path)
+            
+            file_key = filename.replace('.html', '').replace('.htm', '')
+            all_results[file_key] = {
+                'strengths': strengths,
+                'weaknesses': weaknesses
+            }
+            
+            print(f"✅ Completed {filename}: {len(strengths)} strengths, {len(weaknesses)} weaknesses")
+            
+        except Exception as e:
+            print(f"❌ Error with {filename}: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    return all_results
+
+def save_and_print_results(results):
+    """Save to JSON and print summary."""
+    # Clean results to remove empty keys
+    cleaned_results = {}
+    
+    for filename, data in results.items():
+        cleaned_strengths = {}
+        cleaned_weaknesses = {}
+        
+        # Clean strengths
+        for key, value in data['strengths'].items():
+            key = clean_text(key)
+            value = clean_text(value)
+            if key and len(key) > 3:  # Only keep meaningful keys
+                cleaned_strengths[key] = value
+        
+        # Clean weaknesses
+        for key, value in data['weaknesses'].items():
+            key = clean_text(key)
+            value = clean_text(value)
+            if key and len(key) > 3:  # Only keep meaningful keys
+                cleaned_weaknesses[key] = value
+        
+        cleaned_results[filename] = {
+            'strengths': cleaned_strengths,
+            'weaknesses': cleaned_weaknesses
+        }
+    
+    # Save to JSON
+    with open('extracted_results.json', 'w', encoding='utf-8') as f:
+        json.dump(cleaned_results, f, indent=2, ensure_ascii=False)
+    
+    # Print summary
+    print(f"\n{'='*80}")
+    print("📊 FINAL RESULTS SUMMARY")
+    print(f"{'='*80}")
+    
+    for filename, data in cleaned_results.items():
+        print(f"\n📄 {filename}:")
+        print(f"   📈 Strengths: {len(data['strengths'])}")
+        print(f"   📉 Weaknesses: {len(data['weaknesses'])}")
+        
+        # Print actual content
+        if data['strengths']:
+            print("\n   🔹 STRENGTHS:")
+            for i, (key, value) in enumerate(data['strengths'].items(), 1):
+                print(f"      {i}. {key}")
+                if value:
+                    print(f"         → {value[:100]}{'...' if len(value) > 100 else ''}")
+                print()
+        
+        if data['weaknesses']:
+            print("\n   🔸 WEAKNESSES:")
+            for i, (key, value) in enumerate(data['weaknesses'].items(), 1):
+                print(f"      {i}. {key}")
+                if value:
+                    print(f"         → {value[:100]}{'...' if len(value) > 100 else ''}")
+                print()
+    
+    print(f"\n💾 Results saved to 'extracted_results.json'")
+
+if __name__ == "__main__":
+    folder_path = 'html_files'
+    
+    # Check if folder exists
+    if not os.path.exists(folder_path):
+        print(f"❌ Folder '{folder_path}' not found!")
+        exit()
+    
+    # Debug first file
+    html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
+    if html_files:
+        print("🔍 Debugging first HTML file with targeted area approach...")
+        debug_html_structure(os.path.join(folder_path, html_files[0]))
+        print("\n" + "="*80)
+        
+
+    
+    # Process all files
+    print("\n🚀 Processing all HTML files with targeted area approach...")
+    results = process_folder(folder_path)
+    
+    if results:
+        save_and_print_results(results)
+    else:
+        print("❌ No HTML files found or processed successfully!")
+, text, re.IGNORECASE):
+                current_section = 'weaknesses'
+                print(f"      📍 Found Weaknesses header at element {i}")
+                continue
+            # Look for section headers that are followed by a colon and then content
+            elif re.search(r'^\s*Strengths?\s*:\s*.+', text, re.IGNORECASE):
+                current_section = 'strengths'
+                print(f"      📍 Found Strengths section with content at element {i}")
+                # Don't continue - process this element as content too
+            elif re.search(r'^\s*Weakness(es)?\s*:\s*.+', text, re.IGNORECASE):
+                current_section = 'weaknesses'
+                print(f"      📍 Found Weaknesses section with content at element {i}")
+                # Don't continue - process this element as content too
+        
+        # Process list items within a section
+        if element.name == 'li' and current_section:
+            key, value = extract_key_value_from_element(element)
+            if key:
+                if current_section == 'strengths':
+                    strengths_dict[key] = value
+                    print(f"      ✅ Strength: {key[:50]}...")
+                elif current_section == 'weaknesses':
+                    weaknesses_dict[key] = value
+                    print(f"      ✅ Weakness: {key[:50]}...")
+        
+        # Also handle paragraphs and divs with bold content (alternative structure)
+        elif element.name in ['p', 'div'] and current_section and len(text) > 30:
+            key, value = extract_key_value_from_element(element)
+            if key:
+                if current_section == 'strengths':
+                    strengths_dict[key] = value
+                    print(f"      ✅ Strength: {key[:50]}...")
+                elif current_section == 'weaknesses':
+                    weaknesses_dict[key] = value
+                    print(f"      ✅ Weakness: {key[:50]}...")
+    
+    return strengths_dict, weaknesses_dict
+
+def extract_key_value_from_element(element):
+    """
+    Extract key-value pair from a single element
+    This uses the same logic as the working code
+    """
+    # Look for bold elements within this element
+    bold_elements = []
+    
+    # Find all spans with bold styling
+    spans = element.find_all('span')
+    for span in spans:
+        if is_bold_element(span):
+            bold_elements.append(span)
+    
+    # Also check for strong/b tags
+    bold_tags = element.find_all(['strong', 'b'])
+    bold_elements.extend(bold_tags)
+    
+    if bold_elements:
+        # Get the first bold element as the key
+        key_element = bold_elements[0]
+        key = key_element.get_text().strip().rstrip(':')
+        
+        # Get the full text and remove the key part to get the value
+        full_text = element.get_text().strip()
+        key_text = key_element.get_text().strip()
+        
+        # Remove the key from the full text to get the value
+        if key_text in full_text:
+            value = full_text.replace(key_text, '', 1).strip()
+            # Remove leading colon if present
+            value = value.lstrip(':').strip()
+        else:
+            value = full_text
+        
+        # Validate the key (must be meaningful)
+        if key and len(key) > 5 and len(key) < 300:
+            # Clean up the key and value
+            key = clean_text(key)
+            value = clean_text(value)
+            return key, value
+    
+    # If no bold elements found, try colon-based extraction
+    full_text = element.get_text().strip()
+    if ':' in full_text and len(full_text) > 30:
+        colon_pos = full_text.find(':')
+        potential_key = full_text[:colon_pos].strip()
+        potential_value = full_text[colon_pos+1:].strip()
+        
+        # Validate the potential key
+        if (len(potential_key) > 5 and len(potential_key) < 300 and
+            not potential_key.lower().startswith(('the ', 'this ', 'it '))):
+            return clean_text(potential_key), clean_text(potential_value)
+    
+    return None, None
+
+def clean_text(text):
+    """Clean and normalize text content."""
+    if not text:
+        return ""
+    
+    # Remove extra whitespace and normalize
+    text = re.sub(r'\s+', ' ', text)
+    text = text.strip()
+    
+    # Remove leading/trailing colons
+    text = text.strip(':').strip()
+    
+    # Remove section headers that might have leaked in
+    text = re.sub(r'^(Strengths?|Weakness(?:es)?)\s*:?\s*', '', text, flags=re.IGNORECASE)
+    
+    return text
+
+def debug_html_structure(html_file_path):
+    """Enhanced debug function for targeted area approach."""
+    with open(html_file_path, 'r', encoding='utf-8') as file:
+        soup = BeautifulSoup(file.read(), 'html.parser')
+    
+    print("🔍 DEBUGGING WITH TARGETED AREA APPROACH")
+    print("=" * 60)
+    
+    # Step 1: Show target area finding
+    target_section = find_target_area(soup)
+    
+    if target_section:
+        print(f"\n✅ Target area found!")
+        
+        # Show structure of target area
+        all_elements = target_section.find_all(['p', 'ul', 'li', 'div'])
+        print(f"📊 Target area contains {len(all_elements)} elements")
+        
+        # Show first few elements
+        print(f"\n📋 First 10 elements in target area:")
+        for i, element in enumerate(all_elements[:10]):
+            text = element.get_text().strip()
+            if text:
+                print(f"   {i+1}. {element.name}: {text[:80]}...")
+                
+                # Check for bold content
+                bold_spans = element.find_all('span')
+                bold_content = []
+                for span in bold_spans:
+                    if is_bold_element(span):
+                        bold_content.append(span.get_text().strip())
+                
+                strong_tags = [tag.get_text().strip() for tag in element.find_all(['strong', 'b'])]
+                
+                if bold_content or strong_tags:
+                    print(f"      🔥 Bold content: {bold_content + strong_tags}")
+        
+        # Check for section keywords
+        target_text = target_section.get_text()
+        strengths_count = target_text.lower().count('strengths')
+        weakness_count = target_text.lower().count('weakness')
+        
+        print(f"\n📊 Section analysis:")
+        print(f"   'Strengths' appears: {strengths_count} times")
+        print(f"   'Weakness' appears: {weakness_count} times")
+        
+    else:
+        print("❌ No target area found!")
+        
+        # Show what we can find in the whole document
+        full_text = soup.get_text()
+        print(f"📊 Full document length: {len(full_text)} characters")
+        
+        if 'Key Rating Drivers' in full_text:
+            print("✅ 'Key Rating Drivers' found in document")
+        if 'Strengths' in full_text:
+            print("✅ 'Strengths' found in document")
+        if 'Weakness' in full_text:
+            print("✅ 'Weakness' found in document")
+
+def process_folder(folder_path):
+    """Process all HTML files in a folder."""
+    all_results = {}
+    
+    # Find all HTML files
+    html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
+    
+    print(f"📁 Found {len(html_files)} HTML files")
+    
+    # Process each file
+    for filename in html_files:
+        file_path = os.path.join(folder_path, filename)
+        try:
+            print(f"\n{'='*60}")
+            print(f"🔄 Processing: {filename}")
+            print(f"{'='*60}")
+            
+            strengths, weaknesses = extract_strengths_weaknesses(file_path)
+            
+            file_key = filename.replace('.html', '').replace('.htm', '')
+            all_results[file_key] = {
+                'strengths': strengths,
+                'weaknesses': weaknesses
+            }
+            
+            print(f"✅ Completed {filename}: {len(strengths)} strengths, {len(weaknesses)} weaknesses")
+            
+        except Exception as e:
+            print(f"❌ Error with {filename}: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    return all_results
+
+def save_and_print_results(results):
+    """Save to JSON and print summary."""
+    # Clean results to remove empty keys
+    cleaned_results = {}
+    
+    for filename, data in results.items():
+        cleaned_strengths = {}
+        cleaned_weaknesses = {}
+        
+        # Clean strengths
+        for key, value in data['strengths'].items():
+            key = clean_text(key)
+            value = clean_text(value)
+            if key and len(key) > 3:  # Only keep meaningful keys
+                cleaned_strengths[key] = value
+        
+        # Clean weaknesses
+        for key, value in data['weaknesses'].items():
+            key = clean_text(key)
+            value = clean_text(value)
+            if key and len(key) > 3:  # Only keep meaningful keys
+                cleaned_weaknesses[key] = value
+        
+        cleaned_results[filename] = {
+            'strengths': cleaned_strengths,
+            'weaknesses': cleaned_weaknesses
+        }
+    
+    # Save to JSON
+    with open('extracted_results.json', 'w', encoding='utf-8') as f:
+        json.dump(cleaned_results, f, indent=2, ensure_ascii=False)
+    
+    # Print summary
+    print(f"\n{'='*80}")
+    print("📊 FINAL RESULTS SUMMARY")
+    print(f"{'='*80}")
+    
+    for filename, data in cleaned_results.items():
+        print(f"\n📄 {filename}:")
+        print(f"   📈 Strengths: {len(data['strengths'])}")
+        print(f"   📉 Weaknesses: {len(data['weaknesses'])}")
+        
+        # Print actual content
+        if data['strengths']:
+            print("\n   🔹 STRENGTHS:")
+            for i, (key, value) in enumerate(data['strengths'].items(), 1):
+                print(f"      {i}. {key}")
+                if value:
+                    print(f"         → {value[:100]}{'...' if len(value) > 100 else ''}")
+                print()
+        
+        if data['weaknesses']:
+            print("\n   🔸 WEAKNESSES:")
+            for i, (key, value) in enumerate(data['weaknesses'].items(), 1):
+                print(f"      {i}. {key}")
+                if value:
+                    print(f"         → {value[:100]}{'...' if len(value) > 100 else ''}")
+                print()
+    
+    print(f"\n💾 Results saved to 'extracted_results.json'")
+
+if __name__ == "__main__":
+    folder_path = 'html_files'
+    
+    # Check if folder exists
+    if not os.path.exists(folder_path):
+        print(f"❌ Folder '{folder_path}' not found!")
+        exit()
+    
+    # Debug first file
+    html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
+    if html_files:
+        print("🔍 Debugging first HTML file with targeted area approach...")
+        debug_html_structure(os.path.join(folder_path, html_files[0]))
+        print("\n" + "="*80)
+        
+
     
     # Process all files
     print("\n🚀 Processing all HTML files with targeted area approach...")
