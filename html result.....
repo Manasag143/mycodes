@@ -10,11 +10,6 @@ def extract_strengths_weaknesses(html_file_path):
     
     return extract_from_soup(soup)
 
-def extract_from_html_content(html_content):
-    """Extract strengths and weaknesses from HTML content string."""
-    soup = BeautifulSoup(html_content, 'html.parser')
-    return extract_from_soup(soup)
-
 def clean_text(text):
     """Clean and normalize text content."""
     if not text:
@@ -29,27 +24,8 @@ def clean_text(text):
     
     return text
 
-def is_bold_element(element):
-    """Check if element has bold styling using various methods."""
-    # Method 1: Check style attribute for font-weight
-    style = element.get('style', '')
-    if 'font-weight' in style and ('bold' in style or '700' in style or 'bolder' in style):
-        return True
-    
-    # Method 2: Check for bold tags (strong, b)
-    if element.name in ['strong', 'b']:
-        return True
-    
-    # Method 3: Check class attribute
-    classes = element.get('class', [])
-    for cls in classes:
-        if 'bold' in cls.lower():
-            return True
-    
-    return False
-
 def extract_from_soup(soup):
-    """Extract strengths and weaknesses using text-based approach to avoid section mixing."""
+    """Extract strengths and weaknesses with comprehensive debugging."""
     
     # Get the full text content
     full_text = soup.get_text()
@@ -57,243 +33,380 @@ def extract_from_soup(soup):
     # Clean up the text
     full_text = re.sub(r'\s+', ' ', full_text)
     
-    print(f"📄 Document length: {len(full_text)} characters")
+    print(f"📄 Total document length: {len(full_text)} characters")
     
-    # Find the Key Rating Drivers section
-    section_start = -1
-    section_end = len(full_text)
+    # STEP 1: Find the target section containing Key Rating Drivers
+    print("\n🔍 STEP 1: Finding Key Rating Drivers section...")
     
-    # Look for the start
-    start_patterns = [
-        r'Key Rating Drivers[^a-zA-Z]*Detailed Description',
-        r'Key Rating Drivers',
-        r'Strengths\s*:'
-    ]
+    target_text = find_key_rating_section(full_text)
     
-    for pattern in start_patterns:
-        match = re.search(pattern, full_text, re.IGNORECASE)
-        if match:
-            section_start = match.start()
-            print(f"✅ Found section start at position {section_start} using pattern: {pattern}")
-            break
-    
-    if section_start == -1:
+    if not target_text:
         print("❌ Could not find Key Rating Drivers section")
         return {}, {}
     
-    # Look for the end
-    end_patterns = [
-        r'Liquidity\s*:',
-        r'Outlook\s*:',
-        r'Analytical Approach',
-        r'About the Company'
-    ]
+    print(f"✅ Found target section: {len(target_text)} characters")
     
-    for pattern in end_patterns:
-        match = re.search(pattern, full_text[section_start:], re.IGNORECASE)
-        if match:
-            section_end = section_start + match.start()
-            print(f"✅ Found section end at position {section_end} using pattern: {pattern}")
-            break
+    # STEP 2: Show the raw content for manual inspection
+    print("\n📄 STEP 2: Raw target content:")
+    print("=" * 80)
+    print(target_text[:1000])  # Show first 1000 characters
+    if len(target_text) > 1000:
+        print(f"\n... (showing first 1000 of {len(target_text)} characters)")
+    print("=" * 80)
     
-    # Extract the target section
-    target_text = full_text[section_start:section_end]
-    print(f"🎯 Target section: {len(target_text)} characters")
+    # STEP 3: Find Strengths and Weaknesses with multiple approaches
+    print("\n🔍 STEP 3: Extracting Strengths and Weaknesses...")
     
-    # Now extract strengths and weaknesses from this clean text
-    strengths_dict, weaknesses_dict = extract_sections_from_text(target_text)
+    strengths_dict, weaknesses_dict = extract_sections_smart(target_text)
     
     return strengths_dict, weaknesses_dict
 
-def extract_sections_from_text(text):
-    """Extract strengths and weaknesses from clean text using clear boundaries."""
+def find_key_rating_section(full_text):
+    """Find the Key Rating Drivers section with multiple approaches."""
+    
+    # Approach 1: Look for explicit "Key Rating Drivers" section
+    patterns = [
+        r'Key Rating Drivers[^a-zA-Z]*(?:Detailed Description)?\s*(.*?)(?=Liquidity\s*:|Outlook\s*:|Analytical Approach|About the Company|Rating sensitivity)',
+        r'Key Rating Drivers.*?:\s*(.*?)(?=Liquidity|Outlook|Analytical|About)',
+        r'(?:Key Rating Drivers|Detailed Description)(.*?)(?=Liquidity|Outlook|Analytical)'
+    ]
+    
+    for i, pattern in enumerate(patterns, 1):
+        match = re.search(pattern, full_text, re.DOTALL | re.IGNORECASE)
+        if match:
+            content = match.group(1).strip()
+            if len(content) > 100:  # Must be substantial
+                print(f"✅ Found section using pattern {i}")
+                return content
+    
+    # Approach 2: Look for sections that contain both "Strengths" and "Weakness"
+    print("🔄 Trying fallback approach...")
+    
+    strengths_pos = full_text.lower().find('strengths')
+    weakness_pos = full_text.lower().find('weakness')
+    
+    if strengths_pos > -1 and weakness_pos > -1:
+        # Find reasonable boundaries
+        start_pos = max(0, strengths_pos - 200)
+        
+        # Look for end markers
+        end_markers = ['liquidity', 'outlook', 'analytical approach', 'about the company']
+        end_pos = len(full_text)
+        
+        for marker in end_markers:
+            marker_pos = full_text.lower().find(marker, weakness_pos)
+            if marker_pos > -1 and marker_pos < end_pos:
+                end_pos = marker_pos
+        
+        content = full_text[start_pos:end_pos].strip()
+        print(f"✅ Found section using fallback (positions: {start_pos}-{end_pos})")
+        return content
+    
+    return None
+
+def extract_sections_smart(target_text):
+    """Smart extraction with multiple methods and detailed debugging."""
     
     strengths_dict = {}
     weaknesses_dict = {}
     
-    # Find strengths section
-    strengths_match = re.search(r'Strengths?\s*:?\s*(.*?)(?=Weakness|Liquidity|Outlook|$)', 
-                               text, re.DOTALL | re.IGNORECASE)
+    print("\n🔍 Analyzing text structure...")
     
-    if strengths_match:
-        strengths_text = strengths_match.group(1).strip()
-        print(f"📈 Found strengths section: {len(strengths_text)} characters")
-        print(f"📄 Strengths preview: {strengths_text[:200]}...")
+    # Check what we have
+    has_strengths = 'strengths' in target_text.lower()
+    has_weakness = 'weakness' in target_text.lower()
+    
+    print(f"   📊 Contains 'Strengths': {has_strengths}")
+    print(f"   📊 Contains 'Weakness': {has_weakness}")
+    
+    if not has_strengths and not has_weakness:
+        print("❌ No strength/weakness keywords found")
+        return strengths_dict, weaknesses_dict
+    
+    # METHOD 1: Try precise regex extraction
+    print("\n🔄 METHOD 1: Regex-based extraction...")
+    
+    if has_strengths:
+        strengths_patterns = [
+            r'Strengths?\s*:?\s*(.*?)(?=Weakness|Liquidity|Outlook|$)',
+            r'Strengths?\s*:?\s*(.*?)(?=Weakness)',
+            r'Strengths?\s*:\s*(.*?)(?=\n\s*Weakness|\n\s*Liquidity)',
+            r'Strengths?\s*(?::|\.)\s*(.*?)(?=Weakness|Liquidity|Outlook)'
+        ]
         
-        strengths_dict = parse_bullet_points(strengths_text, "Strengths")
-    else:
-        print("❌ No strengths section found")
-    
-    # Find weaknesses section
-    weakness_match = re.search(r'Weakness(?:es)?\s*:?\s*(.*?)(?=Liquidity|Outlook|Analytical|$)', 
-                              text, re.DOTALL | re.IGNORECASE)
-    
-    if weakness_match:
-        weakness_text = weakness_match.group(1).strip()
-        print(f"📉 Found weaknesses section: {len(weakness_text)} characters")
-        print(f"📄 Weaknesses preview: {weakness_text[:200]}...")
+        for i, pattern in enumerate(strengths_patterns, 1):
+            match = re.search(pattern, target_text, re.DOTALL | re.IGNORECASE)
+            if match:
+                strengths_text = match.group(1).strip()
+                if len(strengths_text) > 20:
+                    print(f"   ✅ Strengths found with pattern {i}: {len(strengths_text)} chars")
+                    print(f"   📄 Preview: {strengths_text[:150]}...")
+                    strengths_dict = parse_content_to_dict(strengths_text, "Strengths")
+                    break
         
-        weaknesses_dict = parse_bullet_points(weakness_text, "Weaknesses")
-    else:
-        print("❌ No weaknesses section found")
+        if not strengths_dict:
+            print("   ❌ No strengths extracted with regex")
+    
+    if has_weakness:
+        weakness_patterns = [
+            r'Weakness(?:es)?\s*:?\s*(.*?)(?=Liquidity|Outlook|Analytical|$)',
+            r'Weakness(?:es)?\s*:?\s*(.*?)(?=Liquidity|Outlook)',
+            r'Weakness(?:es)?\s*:\s*(.*?)(?=\n\s*Liquidity|\n\s*Outlook)',
+            r'Weakness(?:es)?\s*(?::|\.)\s*(.*?)(?=Liquidity|Outlook|Analytical)'
+        ]
+        
+        for i, pattern in enumerate(weakness_patterns, 1):
+            match = re.search(pattern, target_text, re.DOTALL | re.IGNORECASE)
+            if match:
+                weakness_text = match.group(1).strip()
+                if len(weakness_text) > 20:
+                    print(f"   ✅ Weaknesses found with pattern {i}: {len(weakness_text)} chars")
+                    print(f"   📄 Preview: {weakness_text[:150]}...")
+                    weaknesses_dict = parse_content_to_dict(weakness_text, "Weaknesses")
+                    break
+        
+        if not weaknesses_dict:
+            print("   ❌ No weaknesses extracted with regex")
+    
+    # METHOD 2: Manual text splitting if regex fails
+    if not strengths_dict and not weaknesses_dict:
+        print("\n🔄 METHOD 2: Manual text splitting...")
+        
+        lines = target_text.split('\n')
+        current_section = None
+        current_content = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Check for section headers
+            if re.search(r'\bStrengths?\s*:?\s*$', line, re.IGNORECASE):
+                if current_section and current_content:
+                    # Process previous section
+                    content_text = ' '.join(current_content)
+                    if current_section == 'strengths':
+                        strengths_dict = parse_content_to_dict(content_text, "Strengths")
+                    elif current_section == 'weaknesses':
+                        weaknesses_dict = parse_content_to_dict(content_text, "Weaknesses")
+                
+                current_section = 'strengths'
+                current_content = []
+                print(f"   📍 Found Strengths header: {line}")
+                continue
+            
+            elif re.search(r'\bWeakness(?:es)?\s*:?\s*$', line, re.IGNORECASE):
+                if current_section and current_content:
+                    # Process previous section
+                    content_text = ' '.join(current_content)
+                    if current_section == 'strengths':
+                        strengths_dict = parse_content_to_dict(content_text, "Strengths")
+                
+                current_section = 'weaknesses'
+                current_content = []
+                print(f"   📍 Found Weaknesses header: {line}")
+                continue
+            
+            elif re.search(r'\b(?:Liquidity|Outlook|Analytical)\b', line, re.IGNORECASE):
+                # End of our target content
+                if current_section and current_content:
+                    content_text = ' '.join(current_content)
+                    if current_section == 'strengths':
+                        strengths_dict = parse_content_to_dict(content_text, "Strengths")
+                    elif current_section == 'weaknesses':
+                        weaknesses_dict = parse_content_to_dict(content_text, "Weaknesses")
+                break
+            
+            # Add content to current section
+            if current_section:
+                current_content.append(line)
+        
+        # Process final section
+        if current_section and current_content:
+            content_text = ' '.join(current_content)
+            if current_section == 'strengths':
+                strengths_dict = parse_content_to_dict(content_text, "Strengths")
+            elif current_section == 'weaknesses':
+                weaknesses_dict = parse_content_to_dict(content_text, "Weaknesses")
+    
+    # METHOD 3: Look for bullet points anywhere in the text
+    if not strengths_dict and not weaknesses_dict:
+        print("\n🔄 METHOD 3: Looking for bullet patterns anywhere...")
+        
+        # Find all potential bullet points
+        bullet_patterns = [
+            r'(Strong [^:]{10,150}):\s*([^.]+(?:\.[^.]*)*)',
+            r'(Robust [^:]{10,150}):\s*([^.]+(?:\.[^.]*)*)',
+            r'(Exposure to [^:]{10,150}):\s*([^.]+(?:\.[^.]*)*)',
+            r'(Well-[^:]{10,150}):\s*([^.]+(?:\.[^.]*)*)',
+            r'([A-Z][a-z]+ [^:]{15,150}):\s*([^.]+(?:\.[^.]*){1,})'
+        ]
+        
+        all_matches = []
+        for pattern in bullet_patterns:
+            matches = re.finditer(pattern, target_text, re.DOTALL)
+            for match in matches:
+                title = clean_text(match.group(1))
+                description = clean_text(match.group(2))
+                if len(title) > 5 and len(description) > 20:
+                    all_matches.append((title, description, match.start()))
+                    print(f"   🔍 Found potential item: {title[:50]}...")
+        
+        # Classify matches as strengths or weaknesses based on position and keywords
+        strengths_keywords = ['strong', 'robust', 'well', 'leading', 'established', 'diversified']
+        weakness_keywords = ['exposure', 'susceptible', 'dependent', 'vulnerable', 'limited']
+        
+        for title, description, position in all_matches:
+            title_lower = title.lower()
+            
+            # Classify based on keywords
+            is_strength = any(kw in title_lower for kw in strengths_keywords)
+            is_weakness = any(kw in title_lower for kw in weakness_keywords)
+            
+            if is_strength and not is_weakness:
+                strengths_dict[title] = description
+            elif is_weakness and not is_strength:
+                weaknesses_dict[title] = description
+            else:
+                # Classify based on position relative to "Strengths" and "Weakness" text
+                strengths_pos = target_text.lower().find('strengths')
+                weakness_pos = target_text.lower().find('weakness')
+                
+                if strengths_pos > -1 and weakness_pos > -1:
+                    if abs(position - strengths_pos) < abs(position - weakness_pos):
+                        strengths_dict[title] = description
+                    else:
+                        weaknesses_dict[title] = description
+                elif strengths_pos > -1:
+                    strengths_dict[title] = description
+                elif weakness_pos > -1:
+                    weaknesses_dict[title] = description
+    
+    print(f"\n📊 Final extraction results:")
+    print(f"   📈 Strengths: {len(strengths_dict)} items")
+    print(f"   📉 Weaknesses: {len(weaknesses_dict)} items")
     
     return strengths_dict, weaknesses_dict
 
-def parse_bullet_points(section_text, section_name):
-    """Parse bullet points from section text into key-value pairs."""
+def parse_content_to_dict(content_text, section_name):
+    """Parse content text into dictionary of title->description pairs."""
     
-    print(f"\n🔍 Parsing {section_name}...")
+    print(f"\n   🔍 Parsing {section_name} content ({len(content_text)} chars)...")
     items = {}
     
-    if not section_text or len(section_text) < 20:
-        print(f"⚠️ Section text too short: {len(section_text)} characters")
+    if len(content_text) < 20:
+        print(f"   ⚠️ Content too short")
         return items
     
-    # Method 1: Split by sentences that end with period and start with capital letter
-    print("   Trying Method 1: Sentence-based splitting...")
+    # Remove section header if it leaked in
+    content_text = re.sub(r'^(?:Strengths?|Weakness(?:es)?)\s*:?\s*', '', content_text, flags=re.IGNORECASE)
     
-    # Look for patterns like "Title: Description. Next Title: Next Description."
-    sentences = re.split(r'(?<=\.)\s+(?=[A-Z])', section_text)
+    # Method 1: Look for colon-separated items
+    colon_items = re.split(r'(?<=\.)\s+(?=[A-Z])', content_text)
     
-    for i, sentence in enumerate(sentences):
-        sentence = sentence.strip()
-        
-        if len(sentence) < 20:  # Skip very short sentences
-            continue
+    for item in colon_items:
+        item = item.strip()
+        if ':' in item and len(item) > 30:
+            colon_pos = item.find(':')
+            title = item[:colon_pos].strip()
+            description = item[colon_pos+1:].strip()
             
-        if ':' in sentence:
-            # Split on first colon
-            colon_pos = sentence.find(':')
-            title = sentence[:colon_pos].strip()
-            description = sentence[colon_pos+1:].strip()
-            
-            # Validate title
-            if (len(title) > 5 and len(title) < 200 and 
-                not title.lower().startswith(('the ', 'this ', 'it ', 'there ', 'these ')) and
-                not title.lower() in ['strengths', 'weaknesses', 'weakness']):
-                
-                title = clean_text(title)
-                description = clean_text(description)
-                
-                if title:  # Only add if title is not empty after cleaning
-                    items[title] = description
-                    print(f"   ✅ Found: {title[:50]}...")
-    
-    # Method 2: If Method 1 didn't work well, try paragraph-based approach
-    if len(items) == 0:
-        print("   Trying Method 2: Paragraph-based splitting...")
-        
-        # Split by double newlines, multiple spaces, or other paragraph indicators
-        paragraphs = re.split(r'\n\s*\n|\.\s{2,}', section_text)
-        
-        for para in paragraphs:
-            para = para.strip()
-            
-            if len(para) < 20 or ':' not in para:
-                continue
-                
-            colon_pos = para.find(':')
-            title = para[:colon_pos].strip()
-            description = para[colon_pos+1:].strip()
-            
-            if (len(title) > 5 and len(title) < 200 and
-                not title.lower() in ['strengths', 'weaknesses', 'weakness']):
+            if (len(title) > 5 and len(title) < 300 and
+                not title.lower().startswith(('the ', 'this ', 'it ', 'there '))):
                 
                 title = clean_text(title)
                 description = clean_text(description)
                 
                 if title:
                     items[title] = description
-                    print(f"   ✅ Found: {title[:50]}...")
+                    print(f"      ✅ {title[:50]}...")
     
-    # Method 3: Pattern-based extraction for common rating document patterns
-    if len(items) == 0:
-        print("   Trying Method 3: Pattern-based extraction...")
-        
+    # Method 2: If no colon items found, try pattern matching
+    if not items:
         patterns = [
             r'(Strong [^:]{10,150}):\s*([^.]+(?:\.[^.]*)*)',
             r'(Robust [^:]{10,150}):\s*([^.]+(?:\.[^.]*)*)',
             r'(Exposure to [^:]{10,150}):\s*([^.]+(?:\.[^.]*)*)',
-            r'(Well-positioned [^:]{10,150}):\s*([^.]+(?:\.[^.]*)*)',
             r'([A-Z][^:]{15,150}):\s*([^.]+(?:\.[^.]*){1,})'
         ]
         
         for pattern in patterns:
-            matches = re.finditer(pattern, section_text, re.DOTALL)
+            matches = re.finditer(pattern, content_text, re.DOTALL)
             for match in matches:
                 title = clean_text(match.group(1))
                 description = clean_text(match.group(2))
                 
-                if (title and len(title) > 5 and len(title) < 200 and
-                    not title.lower() in ['strengths', 'weaknesses', 'weakness']):
-                    
+                if title and len(title) > 5:
                     items[title] = description
-                    print(f"   ✅ Found: {title[:50]}...")
+                    print(f"      ✅ {title[:50]}...")
     
-    print(f"📊 {section_name} parsed: {len(items)} items found")
+    print(f"   📊 Parsed {len(items)} items from {section_name}")
     return items
 
 def debug_html_structure(html_file_path):
-    """Debug function to understand HTML structure."""
+    """Comprehensive debug function."""
     with open(html_file_path, 'r', encoding='utf-8') as file:
         soup = BeautifulSoup(file.read(), 'html.parser')
     
-    print("🔍 DEBUGGING HTML STRUCTURE")
-    print("=" * 50)
+    print("🔍 COMPREHENSIVE HTML DEBUG")
+    print("=" * 60)
     
     full_text = soup.get_text()
     full_text = re.sub(r'\s+', ' ', full_text)
     
-    print(f"📊 Total document length: {len(full_text)} characters")
+    print(f"📊 Document length: {len(full_text)} characters")
     
-    # Check for key terms
-    key_terms = {
-        'Key Rating Drivers': full_text.count('Key Rating Drivers'),
-        'Strengths': full_text.count('Strengths'),
-        'Weaknesses': full_text.count('Weaknesses'),
-        'Weakness': full_text.count('Weakness'),
-        'Liquidity': full_text.count('Liquidity'),
-        'Outlook': full_text.count('Outlook')
-    }
+    # Find all occurrences of key terms
+    key_terms = ['Key Rating Drivers', 'Strengths', 'Weakness', 'Liquidity', 'Outlook']
     
-    print("\n📍 Key terms found:")
-    for term, count in key_terms.items():
-        print(f"   {term}: {count} occurrences")
+    print(f"\n📍 Key term positions:")
+    for term in key_terms:
+        positions = []
+        start = 0
+        while True:
+            pos = full_text.lower().find(term.lower(), start)
+            if pos == -1:
+                break
+            positions.append(pos)
+            start = pos + 1
+        
+        print(f"   {term}: {positions}")
+        
+        # Show context for first occurrence
+        if positions:
+            pos = positions[0]
+            start = max(0, pos - 100)
+            end = min(len(full_text), pos + len(term) + 200)
+            context = full_text[start:end]
+            print(f"      Context: ...{context}...")
     
-    # Show text around strengths
-    strengths_pos = full_text.lower().find('strengths')
-    if strengths_pos > -1:
-        print(f"\n📄 Text around 'Strengths' (position {strengths_pos}):")
-        start = max(0, strengths_pos - 100)
-        end = min(len(full_text), strengths_pos + 300)
-        sample = full_text[start:end]
-        print(f"...{sample}...")
+    print(f"\n🎯 Searching for section boundaries...")
     
-    # Show text around weakness
-    weakness_pos = full_text.lower().find('weakness')
-    if weakness_pos > -1:
-        print(f"\n📄 Text around 'Weakness' (position {weakness_pos}):")
-        start = max(0, weakness_pos - 100)
-        end = min(len(full_text), weakness_pos + 300)
-        sample = full_text[start:end]
-        print(f"...{sample}...")
+    # Look for the specific structure
+    rating_match = re.search(r'Key Rating Drivers.*?Detailed Description(.*?)(?=Liquidity|Outlook|Analytical)', 
+                            full_text, re.DOTALL | re.IGNORECASE)
+    
+    if rating_match:
+        section_content = rating_match.group(1)
+        print(f"✅ Found Key Rating section: {len(section_content)} characters")
+        print(f"📄 Preview:\n{section_content[:500]}...")
+    else:
+        print("❌ Could not find Key Rating section with standard pattern")
 
 def process_folder(folder_path):
     """Process all HTML files in a folder."""
     all_results = {}
     
-    # Find all HTML files
     html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
-    
     print(f"📁 Found {len(html_files)} HTML files")
     
-    # Process each file
     for filename in html_files:
         file_path = os.path.join(folder_path, filename)
         try:
-            print(f"\n{'='*60}")
+            print(f"\n{'='*80}")
             print(f"🔄 Processing: {filename}")
-            print(f"{'='*60}")
+            print(f"{'='*80}")
             
             strengths, weaknesses = extract_strengths_weaknesses(file_path)
             
@@ -303,10 +416,6 @@ def process_folder(folder_path):
                 'weaknesses': weaknesses
             }
             
-            print(f"\n✅ Completed {filename}:")
-            print(f"   📈 Strengths: {len(strengths)}")
-            print(f"   📉 Weaknesses: {len(weaknesses)}")
-            
         except Exception as e:
             print(f"❌ Error with {filename}: {e}")
             import traceback
@@ -314,108 +423,44 @@ def process_folder(folder_path):
     
     return all_results
 
-def save_and_print_results(results):
-    """Save to JSON and print summary."""
-    # Clean results to remove empty keys
-    cleaned_results = {}
-    
-    for filename, data in results.items():
-        cleaned_strengths = {}
-        cleaned_weaknesses = {}
-        
-        # Clean strengths
-        for key, value in data['strengths'].items():
-            key = clean_text(key)
-            value = clean_text(value)
-            if key and len(key) > 3:  # Only keep meaningful keys
-                cleaned_strengths[key] = value
-        
-        # Clean weaknesses  
-        for key, value in data['weaknesses'].items():
-            key = clean_text(key)
-            value = clean_text(value)
-            if key and len(key) > 3:  # Only keep meaningful keys
-                cleaned_weaknesses[key] = value
-        
-        cleaned_results[filename] = {
-            'strengths': cleaned_strengths,
-            'weaknesses': cleaned_weaknesses
-        }
-    
-    # Save to JSON
+def save_results(results):
+    """Save and display results."""
     with open('extracted_results.json', 'w', encoding='utf-8') as f:
-        json.dump(cleaned_results, f, indent=2, ensure_ascii=False)
+        json.dump(results, f, indent=2, ensure_ascii=False)
     
-    # Print detailed summary
     print(f"\n{'='*80}")
-    print("📊 FINAL RESULTS SUMMARY")
+    print("📊 FINAL RESULTS")
     print(f"{'='*80}")
     
-    total_strengths = 0
-    total_weaknesses = 0
-    
-    for filename, data in cleaned_results.items():
-        strengths_count = len(data['strengths'])
-        weaknesses_count = len(data['weaknesses'])
-        
-        total_strengths += strengths_count
-        total_weaknesses += weaknesses_count
-        
+    for filename, data in results.items():
         print(f"\n📄 {filename}:")
-        print(f"   📈 Strengths: {strengths_count}")
-        print(f"   📉 Weaknesses: {weaknesses_count}")
+        print(f"   📈 Strengths: {len(data['strengths'])}")
+        print(f"   📉 Weaknesses: {len(data['weaknesses'])}")
         
-        # Print strengths
-        if data['strengths']:
-            print(f"\n   🔹 STRENGTHS:")
-            for i, (key, value) in enumerate(data['strengths'].items(), 1):
-                print(f"      {i}. {key}")
-                if value:
-                    print(f"         → {value[:100]}{'...' if len(value) > 100 else ''}")
-                print()
+        for title, desc in data['strengths'].items():
+            print(f"      💪 {title}")
         
-        # Print weaknesses
-        if data['weaknesses']:
-            print(f"   🔸 WEAKNESSES:")
-            for i, (key, value) in enumerate(data['weaknesses'].items(), 1):
-                print(f"      {i}. {key}")
-                if value:
-                    print(f"         → {value[:100]}{'...' if len(value) > 100 else ''}")
-                print()
-    
-    print(f"\n📊 TOTALS:")
-    print(f"   📈 Total Strengths: {total_strengths}")
-    print(f"   📉 Total Weaknesses: {total_weaknesses}")
-    print(f"   📁 Files Processed: {len(cleaned_results)}")
+        for title, desc in data['weaknesses'].items():
+            print(f"      ⚠️  {title}")
     
     print(f"\n💾 Results saved to 'extracted_results.json'")
 
 if __name__ == "__main__":
     folder_path = 'html_files'
     
-    # Check if folder exists
     if not os.path.exists(folder_path):
         print(f"❌ Folder '{folder_path}' not found!")
         exit()
     
-    # Debug first file
     html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
     if html_files:
-        print("🔍 Debugging first HTML file structure...")
+        print("🔍 Running comprehensive debug on first file...")
         debug_html_structure(os.path.join(folder_path, html_files[0]))
-        print("\n" + "="*80)
         
-        # Ask user if they want to continue
-        response = input("\n🤔 Continue with processing all files? (y/n): ").lower()
+        response = input(f"\n🤔 Continue processing all {len(html_files)} files? (y/n): ").lower()
         if response != 'y':
-            print("👋 Exiting...")
             exit()
     
-    # Process all files
-    print("\n🚀 Processing all HTML files...")
     results = process_folder(folder_path)
-    
     if results:
-        save_and_print_results(results)
-    else:
-        print("❌ No HTML files found or processed successfully!")
+        save_results(results)
