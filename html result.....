@@ -1,14 +1,421 @@
-{
-  "hitachi_rr": {
-    "strengths": {
-      "Strong market position in the power grid segment": "",
-      "Strong operational, technological and management support from the": "parent",
-      "": "Hitachi views India as a high-growth market, and hence, operations of the company are strategically important to the group. The company not only manufactures an extensive range of products locally for the Indian market, but also exports to group entities globally. With the acquisition of 19.9% stake by Hitachi Ltd in Hitachi Energy Ltd in December 2022, Hitachi Energy India Limited becoming a 100% Hitachi owned entity. This further substantiates strategic importance of Indian market to ultimate parent Hitachi Limited. Hitachi Ltd sees India’s energy market strategically important with strong impetus for growth driven by significant investment being made by public sector towards Renewable Energy, electrification of Indian Railways, Metro expansion and improving ISTS and InSTS connectivity. Further, HEIL uses the Hitachi brand for all external corporate communication and has access to all group-level resources of the parent. Post the acquisition, there has been an operational integration in manufacturing, global procurement, marketing, and sales functions, with the application of global best practices. Furthermore, Hitachi also offers managerial support via delegates on the board of the company. Hence, Crisil Ratings believes Hitachi will continue to extend support to the company over the long term.",
-      "Robust financial risk profile": ""
-    },
-    "weaknesses": {
-      "Susceptibility of profitability to volatility in raw material prices, capital investment cycles and structural issues in the power sector": "",
-      "Exposure to intense competition": ""
-    }
-  }
-}
+from bs4 import BeautifulSoup
+import re
+import os
+import json
+
+def extract_strengths_weaknesses(html_file_path):
+    """Extract strengths and weaknesses from a single HTML file."""
+    with open(html_file_path, 'r', encoding='utf-8') as file:
+        soup = BeautifulSoup(file.read(), 'html.parser')
+    
+    return extract_from_soup(soup)
+
+def extract_from_html_content(html_content):
+    """Extract strengths and weaknesses from HTML content string."""
+    soup = BeautifulSoup(html_content, 'html.parser')
+    return extract_from_soup(soup)
+
+def is_bold_element(element):
+    """Check if element has bold styling using various methods."""
+    # Method 1: Check style attribute for font-weight
+    style = element.get('style', '')
+    if 'font-weight' in style and ('bold' in style or '700' in style or 'bolder' in style):
+        return True
+    
+    # Method 2: Check for bold tags (strong, b)
+    if element.name in ['strong', 'b']:
+        return True
+    
+    # Method 3: Check class attribute
+    classes = element.get('class', [])
+    for cls in classes:
+        if 'bold' in cls.lower():
+            return True
+    
+    # Method 4: Check parent elements for bold styling
+    parent = element.parent
+    if parent:
+        parent_style = parent.get('style', '')
+        if 'font-weight' in parent_style and ('bold' in parent_style or '700' in parent_style):
+            return True
+    
+    return False
+
+def clean_text(text):
+    """Clean and normalize text content."""
+    if not text:
+        return ""
+    
+    # Remove extra whitespace and normalize
+    text = re.sub(r'\s+', ' ', text)
+    text = text.strip()
+    
+    # Remove leading/trailing colons
+    text = text.strip(':').strip()
+    
+    return text
+
+def extract_title_description_from_element(element):
+    """
+    Extract title and description from a single element (li, p, etc.)
+    Returns (title, description) tuple or (None, None) if not valid
+    """
+    # Get all text content first
+    full_text = element.get_text().strip()
+    
+    if not full_text or len(full_text) < 10:  # Skip very short content
+        return None, None
+    
+    # Method 1: Look for bold elements within this element
+    bold_elements = []
+    
+    # Find all spans with bold styling
+    spans = element.find_all('span')
+    for span in spans:
+        if is_bold_element(span):
+            bold_text = clean_text(span.get_text())
+            if bold_text and len(bold_text) > 3:  # Must be meaningful
+                bold_elements.append((span, bold_text))
+    
+    # Also check for strong/b tags
+    bold_tags = element.find_all(['strong', 'b'])
+    for tag in bold_tags:
+        bold_text = clean_text(tag.get_text())
+        if bold_text and len(bold_text) > 3:
+            bold_elements.append((tag, bold_text))
+    
+    # Method 2: If we found bold elements, use the first one as title
+    if bold_elements:
+        # Get the longest bold text as title (more likely to be complete)
+        title_element, title = max(bold_elements, key=lambda x: len(x[1]))
+        
+        # Get remaining text as description
+        # Create a copy of the element and remove the title element
+        element_copy = element.__copy__()
+        
+        # Find corresponding element in copy and remove it
+        if title_element.name == 'span':
+            spans_copy = element_copy.find_all('span')
+            for span in spans_copy:
+                if span.get_text().strip() == title_element.get_text().strip():
+                    span.decompose()
+                    break
+        else:
+            tags_copy = element_copy.find_all(title_element.name)
+            for tag in tags_copy:
+                if tag.get_text().strip() == title_element.get_text().strip():
+                    tag.decompose()
+                    break
+        
+        description = clean_text(element_copy.get_text())
+        
+        # Validate title and description
+        if title and len(title) > 5 and len(title) < 300:
+            return title, description
+    
+    # Method 3: Look for colon-separated content
+    if ':' in full_text:
+        parts = full_text.split(':', 1)
+        potential_title = clean_text(parts[0])
+        potential_desc = clean_text(parts[1])
+        
+        # Validate the title
+        if (potential_title and len(potential_title) > 5 and len(potential_title) < 300 and
+            not potential_title.lower().startswith(('the ', 'this ', 'it ', 'there '))):
+            return potential_title, potential_desc
+    
+    # Method 4: If it's a substantial single sentence, try to extract meaningful title
+    if len(full_text) > 50 and full_text.count('.') <= 2:
+        # Look for patterns like "Strong/Robust/Exposure to..." at the beginning
+        title_patterns = [
+            r'^(Strong [^.]{10,100})',
+            r'^(Robust [^.]{10,100})',
+            r'^(Exposure to [^.]{10,100})',
+            r'^(Well-[^.]{10,100})',
+            r'^([A-Z][^.]{20,100})'
+        ]
+        
+        for pattern in title_patterns:
+            match = re.search(pattern, full_text)
+            if match:
+                potential_title = clean_text(match.group(1))
+                remaining_text = full_text[match.end():].strip()
+                
+                if len(potential_title) > 10 and len(potential_title) < 300:
+                    return potential_title, clean_text(remaining_text)
+    
+    return None, None
+
+def extract_from_soup(soup):
+    """Extract strengths and weaknesses from BeautifulSoup object."""
+    # Find the "Key Rating Drivers" section
+    target_section = None
+    for element in soup.find_all(['p', 'span', 'td']):
+        if 'Key Rating Drivers' in element.get_text():
+            # Get the parent container that likely contains all the content
+            target_section = element.find_parent()
+            # Try to get a larger container if this one seems too small
+            if target_section and len(target_section.get_text()) < 500:
+                larger_parent = target_section.find_parent()
+                if larger_parent and 'Strengths' in larger_parent.get_text():
+                    target_section = larger_parent
+            break
+    
+    if not target_section:
+        print("❌ Could not find Key Rating Drivers section")
+        return {}, {}
+    
+    print(f"✅ Found target section with {len(target_section.get_text())} characters")
+    
+    strengths_dict = {}
+    weaknesses_dict = {}
+    current_section = None
+    
+    # Get all elements in the target section
+    all_elements = target_section.find_all(['p', 'ul', 'li', 'div'])
+    
+    print(f"🔍 Processing {len(all_elements)} elements...")
+    
+    for i, element in enumerate(all_elements):
+        text = element.get_text().strip()
+        
+        # Skip empty elements
+        if not text or len(text) < 5:
+            continue
+        
+        # Check if this is a section header (Strengths/Weaknesses)
+        if re.search(r'\bStrengths?\s*:?\s*$', text, re.IGNORECASE):
+            current_section = 'strengths'
+            print(f"📍 Found Strengths section at element {i}")
+            continue
+        elif re.search(r'\bWeakness(es)?\s*:?\s*$', text, re.IGNORECASE):
+            current_section = 'weaknesses'
+            print(f"📍 Found Weaknesses section at element {i}")
+            continue
+        
+        # Skip section headers that contain both the header and content
+        if current_section is None:
+            if 'Strengths:' in text and len(text) > 20:
+                current_section = 'strengths'
+                print(f"📍 Found Strengths section (with content) at element {i}")
+                # Try to extract content after "Strengths:"
+                strengths_start = text.lower().find('strengths:')
+                if strengths_start > -1:
+                    remaining_text = text[strengths_start + 10:].strip()
+                    if remaining_text:
+                        # Process this remaining text
+                        title, description = extract_title_description_from_element(element)
+                        if title and len(title) > 5:
+                            strengths_dict[title] = description or ""
+                            print(f"  ✅ Extracted: {title}")
+                continue
+            elif 'Weakness' in text and len(text) > 20:
+                current_section = 'weaknesses'
+                print(f"📍 Found Weaknesses section (with content) at element {i}")
+                continue
+        
+        # Process content within a section
+        if current_section and len(text) > 10:
+            title, description = extract_title_description_from_element(element)
+            
+            if title and len(title) > 5:  # Valid title found
+                # Clean up the title and description
+                title = clean_text(title)
+                description = clean_text(description) if description else ""
+                
+                # Additional validation
+                if (title and 
+                    len(title) > 5 and len(title) < 300 and
+                    not title.lower() in ['strengths', 'weaknesses', 'weakness', 'key rating drivers']):
+                    
+                    # Store in appropriate dictionary
+                    if current_section == 'strengths':
+                        strengths_dict[title] = description
+                        print(f"  ✅ Strength: {title[:50]}...")
+                    elif current_section == 'weaknesses':
+                        weaknesses_dict[title] = description
+                        print(f"  ✅ Weakness: {title[:50]}...")
+    
+    print(f"📊 Final results: {len(strengths_dict)} strengths, {len(weaknesses_dict)} weaknesses")
+    return strengths_dict, weaknesses_dict
+
+def debug_html_structure(html_file_path):
+    """Debug function to understand HTML structure."""
+    with open(html_file_path, 'r', encoding='utf-8') as file:
+        soup = BeautifulSoup(file.read(), 'html.parser')
+    
+    print("🔍 DEBUGGING HTML STRUCTURE")
+    print("=" * 50)
+    
+    # Find the target section
+    target_section = None
+    for element in soup.find_all(['p', 'span', 'td']):
+        if 'Key Rating Drivers' in element.get_text():
+            target_section = element.find_parent()
+            break
+    
+    if target_section:
+        print("✅ Found target section!")
+        print(f"📊 Section length: {len(target_section.get_text())} characters")
+        
+        # Show sample content
+        sample_text = target_section.get_text()[:500]
+        print(f"\n📄 Sample content:\n{sample_text}...\n")
+        
+        # Look for Strengths and Weaknesses
+        full_text = target_section.get_text()
+        
+        if 'Strengths' in full_text:
+            print("✅ Found 'Strengths' in content")
+        if 'Weakness' in full_text:
+            print("✅ Found 'Weakness' in content")
+        
+        # Find all list items and paragraphs
+        elements = target_section.find_all(['p', 'li', 'div'])
+        print(f"\n🔍 Found {len(elements)} potential content elements")
+        
+        for i, element in enumerate(elements[:10]):  # Show first 10
+            text = element.get_text().strip()
+            if text and len(text) > 10:
+                print(f"\n{i+1}. Element: {element.name}")
+                print(f"   Text: {text[:100]}...")
+                
+                # Check for bold content
+                bold_spans = element.find_all('span')
+                bold_content = []
+                for span in bold_spans:
+                    if is_bold_element(span):
+                        bold_content.append(span.get_text().strip())
+                
+                if bold_content:
+                    print(f"   Bold content: {bold_content}")
+    else:
+        print("❌ Target section not found!")
+        
+        # Try to find any mention of these terms
+        all_text = soup.get_text()
+        if 'Key Rating Drivers' in all_text:
+            print("ℹ️  'Key Rating Drivers' found in document")
+        if 'Strengths' in all_text:
+            print("ℹ️  'Strengths' found in document")
+        if 'Weakness' in all_text:
+            print("ℹ️  'Weakness' found in document")
+
+def process_folder(folder_path):
+    """Process all HTML files in a folder."""
+    all_results = {}
+    
+    # Find all HTML files
+    html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
+    
+    print(f"📁 Found {len(html_files)} HTML files")
+    
+    # Process each file
+    for filename in html_files:
+        file_path = os.path.join(folder_path, filename)
+        try:
+            print(f"\n🔄 Processing: {filename}")
+            print("-" * 40)
+            strengths, weaknesses = extract_strengths_weaknesses(file_path)
+            
+            file_key = filename.replace('.html', '').replace('.htm', '')
+            all_results[file_key] = {
+                'strengths': strengths,
+                'weaknesses': weaknesses
+            }
+            
+            print(f"✅ Completed: {len(strengths)} strengths, {len(weaknesses)} weaknesses")
+            
+        except Exception as e:
+            print(f"❌ Error with {filename}: {e}")
+    
+    return all_results
+
+def save_and_print_results(results):
+    """Save to JSON and print summary."""
+    # Filter out empty keys and values
+    cleaned_results = {}
+    
+    for filename, data in results.items():
+        cleaned_strengths = {}
+        cleaned_weaknesses = {}
+        
+        # Clean strengths
+        for key, value in data['strengths'].items():
+            key = clean_text(key)
+            value = clean_text(value)
+            if key and len(key) > 3:  # Only keep meaningful keys
+                cleaned_strengths[key] = value
+        
+        # Clean weaknesses
+        for key, value in data['weaknesses'].items():
+            key = clean_text(key)
+            value = clean_text(value)
+            if key and len(key) > 3:  # Only keep meaningful keys
+                cleaned_weaknesses[key] = value
+        
+        cleaned_results[filename] = {
+            'strengths': cleaned_strengths,
+            'weaknesses': cleaned_weaknesses
+        }
+    
+    # Save to JSON
+    with open('extracted_results.json', 'w', encoding='utf-8') as f:
+        json.dump(cleaned_results, f, indent=2, ensure_ascii=False)
+    
+    # Print summary
+    print(f"\n{'='*80}")
+    print("📊 FINAL RESULTS SUMMARY")
+    print(f"{'='*80}")
+    
+    for filename, data in cleaned_results.items():
+        print(f"\n📄 {filename}:")
+        print(f"   ✅ Strengths: {len(data['strengths'])}")
+        print(f"   ⚠️  Weaknesses: {len(data['weaknesses'])}")
+        
+        # Print actual content
+        if data['strengths']:
+            print("\n   🔹 STRENGTHS:")
+            for i, (key, value) in enumerate(data['strengths'].items(), 1):
+                print(f"   {i}. Title: {key}")
+                if value:
+                    print(f"      Description: {value[:150]}...")
+                else:
+                    print(f"      Description: [No description]")
+                print()
+        
+        if data['weaknesses']:
+            print("\n   🔸 WEAKNESSES:")
+            for i, (key, value) in enumerate(data['weaknesses'].items(), 1):
+                print(f"   {i}. Title: {key}")
+                if value:
+                    print(f"      Description: {value[:150]}...")
+                else:
+                    print(f"      Description: [No description]")
+                print()
+    
+    print(f"\n💾 Cleaned results saved to 'extracted_results.json'")
+
+if __name__ == "__main__":
+    folder_path = 'html_files'
+    
+    # Check if folder exists
+    if not os.path.exists(folder_path):
+        print(f"❌ Folder '{folder_path}' not found!")
+        exit()
+    
+    # Debug first file
+    html_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.html', '.htm'))]
+    if html_files:
+        print("🔍 Debugging first HTML file structure...")
+        debug_html_structure(os.path.join(folder_path, html_files[0]))
+        print("\n" + "="*80 + "\n")
+    
+    # Process all files
+    print("🚀 Processing all HTML files in folder...")
+    results = process_folder(folder_path)
+    
+    if results:
+        save_and_print_results(results)
+    else:
+        print("❌ No HTML files found or processed successfully!")
