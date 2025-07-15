@@ -15,6 +15,20 @@ def extract_from_html_content(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     return extract_from_soup(soup)
 
+def clean_text(text):
+    """Clean and normalize text content."""
+    if not text:
+        return ""
+    
+    # Remove extra whitespace and normalize
+    text = re.sub(r'\s+', ' ', text)
+    text = text.strip()
+    
+    # Remove leading/trailing colons
+    text = text.strip(':').strip()
+    
+    return text
+
 def is_bold_element(element):
     """Check if element has bold styling using various methods."""
     # Method 1: Check style attribute for font-weight
@@ -32,212 +46,192 @@ def is_bold_element(element):
         if 'bold' in cls.lower():
             return True
     
-    # Method 4: Check parent elements for bold styling
-    parent = element.parent
-    if parent:
-        parent_style = parent.get('style', '')
-        if 'font-weight' in parent_style and ('bold' in parent_style or '700' in parent_style):
-            return True
-    
     return False
 
-def clean_text(text):
-    """Clean and normalize text content."""
-    if not text:
-        return ""
-    
-    # Remove extra whitespace and normalize
-    text = re.sub(r'\s+', ' ', text)
-    text = text.strip()
-    
-    # Remove leading/trailing colons
-    text = text.strip(':').strip()
-    
-    return text
-
-def extract_title_description_from_element(element):
-    """
-    Extract title and description from a single element (li, p, etc.)
-    Returns (title, description) tuple or (None, None) if not valid
-    """
-    # Get all text content first
-    full_text = element.get_text().strip()
-    
-    if not full_text or len(full_text) < 10:  # Skip very short content
-        return None, None
-    
-    # Method 1: Look for bold elements within this element
-    bold_elements = []
-    
-    # Find all spans with bold styling
-    spans = element.find_all('span')
-    for span in spans:
-        if is_bold_element(span):
-            bold_text = clean_text(span.get_text())
-            if bold_text and len(bold_text) > 3:  # Must be meaningful
-                bold_elements.append((span, bold_text))
-    
-    # Also check for strong/b tags
-    bold_tags = element.find_all(['strong', 'b'])
-    for tag in bold_tags:
-        bold_text = clean_text(tag.get_text())
-        if bold_text and len(bold_text) > 3:
-            bold_elements.append((tag, bold_text))
-    
-    # Method 2: If we found bold elements, use the first one as title
-    if bold_elements:
-        # Get the longest bold text as title (more likely to be complete)
-        title_element, title = max(bold_elements, key=lambda x: len(x[1]))
-        
-        # Get remaining text as description
-        # Create a copy of the element and remove the title element
-        element_copy = element.__copy__()
-        
-        # Find corresponding element in copy and remove it
-        if title_element.name == 'span':
-            spans_copy = element_copy.find_all('span')
-            for span in spans_copy:
-                if span.get_text().strip() == title_element.get_text().strip():
-                    span.decompose()
-                    break
-        else:
-            tags_copy = element_copy.find_all(title_element.name)
-            for tag in tags_copy:
-                if tag.get_text().strip() == title_element.get_text().strip():
-                    tag.decompose()
-                    break
-        
-        description = clean_text(element_copy.get_text())
-        
-        # Validate title and description
-        if title and len(title) > 5 and len(title) < 300:
-            return title, description
-    
-    # Method 3: Look for colon-separated content
-    if ':' in full_text:
-        parts = full_text.split(':', 1)
-        potential_title = clean_text(parts[0])
-        potential_desc = clean_text(parts[1])
-        
-        # Validate the title
-        if (potential_title and len(potential_title) > 5 and len(potential_title) < 300 and
-            not potential_title.lower().startswith(('the ', 'this ', 'it ', 'there '))):
-            return potential_title, potential_desc
-    
-    # Method 4: If it's a substantial single sentence, try to extract meaningful title
-    if len(full_text) > 50 and full_text.count('.') <= 2:
-        # Look for patterns like "Strong/Robust/Exposure to..." at the beginning
-        title_patterns = [
-            r'^(Strong [^.]{10,100})',
-            r'^(Robust [^.]{10,100})',
-            r'^(Exposure to [^.]{10,100})',
-            r'^(Well-[^.]{10,100})',
-            r'^([A-Z][^.]{20,100})'
-        ]
-        
-        for pattern in title_patterns:
-            match = re.search(pattern, full_text)
-            if match:
-                potential_title = clean_text(match.group(1))
-                remaining_text = full_text[match.end():].strip()
-                
-                if len(potential_title) > 10 and len(potential_title) < 300:
-                    return potential_title, clean_text(remaining_text)
-    
-    return None, None
-
 def extract_from_soup(soup):
-    """Extract strengths and weaknesses from BeautifulSoup object."""
-    # Find the "Key Rating Drivers" section
-    target_section = None
-    for element in soup.find_all(['p', 'span', 'td']):
-        if 'Key Rating Drivers' in element.get_text():
-            # Get the parent container that likely contains all the content
-            target_section = element.find_parent()
-            # Try to get a larger container if this one seems too small
-            if target_section and len(target_section.get_text()) < 500:
-                larger_parent = target_section.find_parent()
-                if larger_parent and 'Strengths' in larger_parent.get_text():
-                    target_section = larger_parent
+    """Extract strengths and weaknesses using text-based approach to avoid section mixing."""
+    
+    # Get the full text content
+    full_text = soup.get_text()
+    
+    # Clean up the text
+    full_text = re.sub(r'\s+', ' ', full_text)
+    
+    print(f"📄 Document length: {len(full_text)} characters")
+    
+    # Find the Key Rating Drivers section
+    section_start = -1
+    section_end = len(full_text)
+    
+    # Look for the start
+    start_patterns = [
+        r'Key Rating Drivers[^a-zA-Z]*Detailed Description',
+        r'Key Rating Drivers',
+        r'Strengths\s*:'
+    ]
+    
+    for pattern in start_patterns:
+        match = re.search(pattern, full_text, re.IGNORECASE)
+        if match:
+            section_start = match.start()
+            print(f"✅ Found section start at position {section_start} using pattern: {pattern}")
             break
     
-    if not target_section:
+    if section_start == -1:
         print("❌ Could not find Key Rating Drivers section")
         return {}, {}
     
-    print(f"✅ Found target section with {len(target_section.get_text())} characters")
+    # Look for the end
+    end_patterns = [
+        r'Liquidity\s*:',
+        r'Outlook\s*:',
+        r'Analytical Approach',
+        r'About the Company'
+    ]
+    
+    for pattern in end_patterns:
+        match = re.search(pattern, full_text[section_start:], re.IGNORECASE)
+        if match:
+            section_end = section_start + match.start()
+            print(f"✅ Found section end at position {section_end} using pattern: {pattern}")
+            break
+    
+    # Extract the target section
+    target_text = full_text[section_start:section_end]
+    print(f"🎯 Target section: {len(target_text)} characters")
+    
+    # Now extract strengths and weaknesses from this clean text
+    strengths_dict, weaknesses_dict = extract_sections_from_text(target_text)
+    
+    return strengths_dict, weaknesses_dict
+
+def extract_sections_from_text(text):
+    """Extract strengths and weaknesses from clean text using clear boundaries."""
     
     strengths_dict = {}
     weaknesses_dict = {}
-    current_section = None
     
-    # Get all elements in the target section
-    all_elements = target_section.find_all(['p', 'ul', 'li', 'div'])
+    # Find strengths section
+    strengths_match = re.search(r'Strengths?\s*:?\s*(.*?)(?=Weakness|Liquidity|Outlook|$)', 
+                               text, re.DOTALL | re.IGNORECASE)
     
-    print(f"🔍 Processing {len(all_elements)} elements...")
+    if strengths_match:
+        strengths_text = strengths_match.group(1).strip()
+        print(f"📈 Found strengths section: {len(strengths_text)} characters")
+        print(f"📄 Strengths preview: {strengths_text[:200]}...")
+        
+        strengths_dict = parse_bullet_points(strengths_text, "Strengths")
+    else:
+        print("❌ No strengths section found")
     
-    for i, element in enumerate(all_elements):
-        text = element.get_text().strip()
-        
-        # Skip empty elements
-        if not text or len(text) < 5:
-            continue
-        
-        # Check if this is a section header (Strengths/Weaknesses)
-        if re.search(r'\bStrengths?\s*:?\s*$', text, re.IGNORECASE):
-            current_section = 'strengths'
-            print(f"📍 Found Strengths section at element {i}")
-            continue
-        elif re.search(r'\bWeakness(es)?\s*:?\s*$', text, re.IGNORECASE):
-            current_section = 'weaknesses'
-            print(f"📍 Found Weaknesses section at element {i}")
-            continue
-        
-        # Skip section headers that contain both the header and content
-        if current_section is None:
-            if 'Strengths:' in text and len(text) > 20:
-                current_section = 'strengths'
-                print(f"📍 Found Strengths section (with content) at element {i}")
-                # Try to extract content after "Strengths:"
-                strengths_start = text.lower().find('strengths:')
-                if strengths_start > -1:
-                    remaining_text = text[strengths_start + 10:].strip()
-                    if remaining_text:
-                        # Process this remaining text
-                        title, description = extract_title_description_from_element(element)
-                        if title and len(title) > 5:
-                            strengths_dict[title] = description or ""
-                            print(f"  ✅ Extracted: {title}")
-                continue
-            elif 'Weakness' in text and len(text) > 20:
-                current_section = 'weaknesses'
-                print(f"📍 Found Weaknesses section (with content) at element {i}")
-                continue
-        
-        # Process content within a section
-        if current_section and len(text) > 10:
-            title, description = extract_title_description_from_element(element)
-            
-            if title and len(title) > 5:  # Valid title found
-                # Clean up the title and description
-                title = clean_text(title)
-                description = clean_text(description) if description else ""
-                
-                # Additional validation
-                if (title and 
-                    len(title) > 5 and len(title) < 300 and
-                    not title.lower() in ['strengths', 'weaknesses', 'weakness', 'key rating drivers']):
-                    
-                    # Store in appropriate dictionary
-                    if current_section == 'strengths':
-                        strengths_dict[title] = description
-                        print(f"  ✅ Strength: {title[:50]}...")
-                    elif current_section == 'weaknesses':
-                        weaknesses_dict[title] = description
-                        print(f"  ✅ Weakness: {title[:50]}...")
+    # Find weaknesses section
+    weakness_match = re.search(r'Weakness(?:es)?\s*:?\s*(.*?)(?=Liquidity|Outlook|Analytical|$)', 
+                              text, re.DOTALL | re.IGNORECASE)
     
-    print(f"📊 Final results: {len(strengths_dict)} strengths, {len(weaknesses_dict)} weaknesses")
+    if weakness_match:
+        weakness_text = weakness_match.group(1).strip()
+        print(f"📉 Found weaknesses section: {len(weakness_text)} characters")
+        print(f"📄 Weaknesses preview: {weakness_text[:200]}...")
+        
+        weaknesses_dict = parse_bullet_points(weakness_text, "Weaknesses")
+    else:
+        print("❌ No weaknesses section found")
+    
     return strengths_dict, weaknesses_dict
+
+def parse_bullet_points(section_text, section_name):
+    """Parse bullet points from section text into key-value pairs."""
+    
+    print(f"\n🔍 Parsing {section_name}...")
+    items = {}
+    
+    if not section_text or len(section_text) < 20:
+        print(f"⚠️ Section text too short: {len(section_text)} characters")
+        return items
+    
+    # Method 1: Split by sentences that end with period and start with capital letter
+    print("   Trying Method 1: Sentence-based splitting...")
+    
+    # Look for patterns like "Title: Description. Next Title: Next Description."
+    sentences = re.split(r'(?<=\.)\s+(?=[A-Z])', section_text)
+    
+    for i, sentence in enumerate(sentences):
+        sentence = sentence.strip()
+        
+        if len(sentence) < 20:  # Skip very short sentences
+            continue
+            
+        if ':' in sentence:
+            # Split on first colon
+            colon_pos = sentence.find(':')
+            title = sentence[:colon_pos].strip()
+            description = sentence[colon_pos+1:].strip()
+            
+            # Validate title
+            if (len(title) > 5 and len(title) < 200 and 
+                not title.lower().startswith(('the ', 'this ', 'it ', 'there ', 'these ')) and
+                not title.lower() in ['strengths', 'weaknesses', 'weakness']):
+                
+                title = clean_text(title)
+                description = clean_text(description)
+                
+                if title:  # Only add if title is not empty after cleaning
+                    items[title] = description
+                    print(f"   ✅ Found: {title[:50]}...")
+    
+    # Method 2: If Method 1 didn't work well, try paragraph-based approach
+    if len(items) == 0:
+        print("   Trying Method 2: Paragraph-based splitting...")
+        
+        # Split by double newlines, multiple spaces, or other paragraph indicators
+        paragraphs = re.split(r'\n\s*\n|\.\s{2,}', section_text)
+        
+        for para in paragraphs:
+            para = para.strip()
+            
+            if len(para) < 20 or ':' not in para:
+                continue
+                
+            colon_pos = para.find(':')
+            title = para[:colon_pos].strip()
+            description = para[colon_pos+1:].strip()
+            
+            if (len(title) > 5 and len(title) < 200 and
+                not title.lower() in ['strengths', 'weaknesses', 'weakness']):
+                
+                title = clean_text(title)
+                description = clean_text(description)
+                
+                if title:
+                    items[title] = description
+                    print(f"   ✅ Found: {title[:50]}...")
+    
+    # Method 3: Pattern-based extraction for common rating document patterns
+    if len(items) == 0:
+        print("   Trying Method 3: Pattern-based extraction...")
+        
+        patterns = [
+            r'(Strong [^:]{10,150}):\s*([^.]+(?:\.[^.]*)*)',
+            r'(Robust [^:]{10,150}):\s*([^.]+(?:\.[^.]*)*)',
+            r'(Exposure to [^:]{10,150}):\s*([^.]+(?:\.[^.]*)*)',
+            r'(Well-positioned [^:]{10,150}):\s*([^.]+(?:\.[^.]*)*)',
+            r'([A-Z][^:]{15,150}):\s*([^.]+(?:\.[^.]*){1,})'
+        ]
+        
+        for pattern in patterns:
+            matches = re.finditer(pattern, section_text, re.DOTALL)
+            for match in matches:
+                title = clean_text(match.group(1))
+                description = clean_text(match.group(2))
+                
+                if (title and len(title) > 5 and len(title) < 200 and
+                    not title.lower() in ['strengths', 'weaknesses', 'weakness']):
+                    
+                    items[title] = description
+                    print(f"   ✅ Found: {title[:50]}...")
+    
+    print(f"📊 {section_name} parsed: {len(items)} items found")
+    return items
 
 def debug_html_structure(html_file_path):
     """Debug function to understand HTML structure."""
@@ -247,59 +241,42 @@ def debug_html_structure(html_file_path):
     print("🔍 DEBUGGING HTML STRUCTURE")
     print("=" * 50)
     
-    # Find the target section
-    target_section = None
-    for element in soup.find_all(['p', 'span', 'td']):
-        if 'Key Rating Drivers' in element.get_text():
-            target_section = element.find_parent()
-            break
+    full_text = soup.get_text()
+    full_text = re.sub(r'\s+', ' ', full_text)
     
-    if target_section:
-        print("✅ Found target section!")
-        print(f"📊 Section length: {len(target_section.get_text())} characters")
-        
-        # Show sample content
-        sample_text = target_section.get_text()[:500]
-        print(f"\n📄 Sample content:\n{sample_text}...\n")
-        
-        # Look for Strengths and Weaknesses
-        full_text = target_section.get_text()
-        
-        if 'Strengths' in full_text:
-            print("✅ Found 'Strengths' in content")
-        if 'Weakness' in full_text:
-            print("✅ Found 'Weakness' in content")
-        
-        # Find all list items and paragraphs
-        elements = target_section.find_all(['p', 'li', 'div'])
-        print(f"\n🔍 Found {len(elements)} potential content elements")
-        
-        for i, element in enumerate(elements[:10]):  # Show first 10
-            text = element.get_text().strip()
-            if text and len(text) > 10:
-                print(f"\n{i+1}. Element: {element.name}")
-                print(f"   Text: {text[:100]}...")
-                
-                # Check for bold content
-                bold_spans = element.find_all('span')
-                bold_content = []
-                for span in bold_spans:
-                    if is_bold_element(span):
-                        bold_content.append(span.get_text().strip())
-                
-                if bold_content:
-                    print(f"   Bold content: {bold_content}")
-    else:
-        print("❌ Target section not found!")
-        
-        # Try to find any mention of these terms
-        all_text = soup.get_text()
-        if 'Key Rating Drivers' in all_text:
-            print("ℹ️  'Key Rating Drivers' found in document")
-        if 'Strengths' in all_text:
-            print("ℹ️  'Strengths' found in document")
-        if 'Weakness' in all_text:
-            print("ℹ️  'Weakness' found in document")
+    print(f"📊 Total document length: {len(full_text)} characters")
+    
+    # Check for key terms
+    key_terms = {
+        'Key Rating Drivers': full_text.count('Key Rating Drivers'),
+        'Strengths': full_text.count('Strengths'),
+        'Weaknesses': full_text.count('Weaknesses'),
+        'Weakness': full_text.count('Weakness'),
+        'Liquidity': full_text.count('Liquidity'),
+        'Outlook': full_text.count('Outlook')
+    }
+    
+    print("\n📍 Key terms found:")
+    for term, count in key_terms.items():
+        print(f"   {term}: {count} occurrences")
+    
+    # Show text around strengths
+    strengths_pos = full_text.lower().find('strengths')
+    if strengths_pos > -1:
+        print(f"\n📄 Text around 'Strengths' (position {strengths_pos}):")
+        start = max(0, strengths_pos - 100)
+        end = min(len(full_text), strengths_pos + 300)
+        sample = full_text[start:end]
+        print(f"...{sample}...")
+    
+    # Show text around weakness
+    weakness_pos = full_text.lower().find('weakness')
+    if weakness_pos > -1:
+        print(f"\n📄 Text around 'Weakness' (position {weakness_pos}):")
+        start = max(0, weakness_pos - 100)
+        end = min(len(full_text), weakness_pos + 300)
+        sample = full_text[start:end]
+        print(f"...{sample}...")
 
 def process_folder(folder_path):
     """Process all HTML files in a folder."""
@@ -314,8 +291,10 @@ def process_folder(folder_path):
     for filename in html_files:
         file_path = os.path.join(folder_path, filename)
         try:
-            print(f"\n🔄 Processing: {filename}")
-            print("-" * 40)
+            print(f"\n{'='*60}")
+            print(f"🔄 Processing: {filename}")
+            print(f"{'='*60}")
+            
             strengths, weaknesses = extract_strengths_weaknesses(file_path)
             
             file_key = filename.replace('.html', '').replace('.htm', '')
@@ -324,16 +303,20 @@ def process_folder(folder_path):
                 'weaknesses': weaknesses
             }
             
-            print(f"✅ Completed: {len(strengths)} strengths, {len(weaknesses)} weaknesses")
+            print(f"\n✅ Completed {filename}:")
+            print(f"   📈 Strengths: {len(strengths)}")
+            print(f"   📉 Weaknesses: {len(weaknesses)}")
             
         except Exception as e:
             print(f"❌ Error with {filename}: {e}")
+            import traceback
+            traceback.print_exc()
     
     return all_results
 
 def save_and_print_results(results):
     """Save to JSON and print summary."""
-    # Filter out empty keys and values
+    # Clean results to remove empty keys
     cleaned_results = {}
     
     for filename, data in results.items():
@@ -347,7 +330,7 @@ def save_and_print_results(results):
             if key and len(key) > 3:  # Only keep meaningful keys
                 cleaned_strengths[key] = value
         
-        # Clean weaknesses
+        # Clean weaknesses  
         for key, value in data['weaknesses'].items():
             key = clean_text(key)
             value = clean_text(value)
@@ -363,38 +346,49 @@ def save_and_print_results(results):
     with open('extracted_results.json', 'w', encoding='utf-8') as f:
         json.dump(cleaned_results, f, indent=2, ensure_ascii=False)
     
-    # Print summary
+    # Print detailed summary
     print(f"\n{'='*80}")
     print("📊 FINAL RESULTS SUMMARY")
     print(f"{'='*80}")
     
+    total_strengths = 0
+    total_weaknesses = 0
+    
     for filename, data in cleaned_results.items():
-        print(f"\n📄 {filename}:")
-        print(f"   ✅ Strengths: {len(data['strengths'])}")
-        print(f"   ⚠️  Weaknesses: {len(data['weaknesses'])}")
+        strengths_count = len(data['strengths'])
+        weaknesses_count = len(data['weaknesses'])
         
-        # Print actual content
+        total_strengths += strengths_count
+        total_weaknesses += weaknesses_count
+        
+        print(f"\n📄 {filename}:")
+        print(f"   📈 Strengths: {strengths_count}")
+        print(f"   📉 Weaknesses: {weaknesses_count}")
+        
+        # Print strengths
         if data['strengths']:
-            print("\n   🔹 STRENGTHS:")
+            print(f"\n   🔹 STRENGTHS:")
             for i, (key, value) in enumerate(data['strengths'].items(), 1):
-                print(f"   {i}. Title: {key}")
+                print(f"      {i}. {key}")
                 if value:
-                    print(f"      Description: {value[:150]}...")
-                else:
-                    print(f"      Description: [No description]")
+                    print(f"         → {value[:100]}{'...' if len(value) > 100 else ''}")
                 print()
         
+        # Print weaknesses
         if data['weaknesses']:
-            print("\n   🔸 WEAKNESSES:")
+            print(f"   🔸 WEAKNESSES:")
             for i, (key, value) in enumerate(data['weaknesses'].items(), 1):
-                print(f"   {i}. Title: {key}")
+                print(f"      {i}. {key}")
                 if value:
-                    print(f"      Description: {value[:150]}...")
-                else:
-                    print(f"      Description: [No description]")
+                    print(f"         → {value[:100]}{'...' if len(value) > 100 else ''}")
                 print()
     
-    print(f"\n💾 Cleaned results saved to 'extracted_results.json'")
+    print(f"\n📊 TOTALS:")
+    print(f"   📈 Total Strengths: {total_strengths}")
+    print(f"   📉 Total Weaknesses: {total_weaknesses}")
+    print(f"   📁 Files Processed: {len(cleaned_results)}")
+    
+    print(f"\n💾 Results saved to 'extracted_results.json'")
 
 if __name__ == "__main__":
     folder_path = 'html_files'
@@ -409,10 +403,16 @@ if __name__ == "__main__":
     if html_files:
         print("🔍 Debugging first HTML file structure...")
         debug_html_structure(os.path.join(folder_path, html_files[0]))
-        print("\n" + "="*80 + "\n")
+        print("\n" + "="*80)
+        
+        # Ask user if they want to continue
+        response = input("\n🤔 Continue with processing all files? (y/n): ").lower()
+        if response != 'y':
+            print("👋 Exiting...")
+            exit()
     
     # Process all files
-    print("🚀 Processing all HTML files in folder...")
+    print("\n🚀 Processing all HTML files...")
     results = process_folder(folder_path)
     
     if results:
