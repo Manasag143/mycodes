@@ -157,7 +157,7 @@ def extract_from_target_section(target_section):
                 current_section = 'strengths'
                 print(f"      📍 Found Strengths section with content at element {i}")
                 # Don't continue - process this element as content too
-            elif re.search(r'^\s*Weakness(es)?\s*:\s*.+', text, re.IGNORECASE):
+            elif re.search(r'^\s*Weakness(?:es)?\s*:\s*.+', text, re.IGNORECASE):
                 current_section = 'weaknesses'
                 print(f"      📍 Found Weaknesses section with content at element {i}")
                 # Don't continue - process this element as content too
